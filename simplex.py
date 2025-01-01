@@ -32,6 +32,9 @@ class Simplex:
         show_final_results : bool
             Whether to display the final results (solution and objective value)
         """
+        if problem_type.lower() == 'max':
+                    c = [-ci for ci in c]
+
         self.c = [Fraction(str(ci)) for ci in c]
         self.A = [[Fraction(str(aij)) for aij in row] for row in A]
         self.b = [Fraction(str(bi)) for bi in b]
@@ -51,108 +54,101 @@ class Simplex:
 
     def build_initial_tableau_phase_I(self):
         """Build initial tableau for Phase I with proper handling of artificial variables"""
+        # Count variables needed
         num_slack = sum(1 for ct in self.constraint_types if ct == '<=')
-        num_artificial = sum(1 for ct in self.constraint_types if ct == '=')
-        self.n = self.n_vars + num_slack + num_artificial
+        num_surplus = sum(1 for ct in self.constraint_types if ct == '>=')
+        num_artificial = sum(1 for ct in self.constraint_types if ct in ['=', '>='])
+        
+        # Total number of variables (original + slack + surplus + artificial)
+        self.n = self.n_vars + num_slack + num_surplus + num_artificial
+        
+        # Initialize counters and lists
         slack_count = 0
+        surplus_count = 0
         artificial_count = 0
         self.tableau = []
         self.basis = []
         self.artificial_vars = []
 
+        # Build each constraint row
         for i in range(self.m):
             row = [Fraction(0)] * (self.n + 1)
+            
+            # Copy original coefficients
             for j in range(self.n_vars):
                 row[j] = self.A[i][j]
+            
+            current_pos = self.n_vars
+            
             if self.constraint_types[i] == '<=':
-                row[self.n_vars + slack_count] = Fraction(1)
-                self.basis.append(self.n_vars + slack_count)
+                # Add slack variable
+                row[current_pos + slack_count] = Fraction(1)
+                self.basis.append(current_pos + slack_count)
                 slack_count += 1
+                
+            elif self.constraint_types[i] == '>=':
+                # Add surplus variable
+                row[current_pos + num_slack + surplus_count] = Fraction(-1)
+                # Add artificial variable
+                art_var = current_pos + num_slack + num_surplus + artificial_count
+                row[art_var] = Fraction(1)
+                self.artificial_vars.append(art_var)
+                self.basis.append(art_var)
+                surplus_count += 1
+                artificial_count += 1
+                
             elif self.constraint_types[i] == '=':
-                art_var = self.n_vars + num_slack + artificial_count
+                # Add artificial variable
+                art_var = current_pos + num_slack + num_surplus + artificial_count
                 row[art_var] = Fraction(1)
                 self.artificial_vars.append(art_var)
                 self.basis.append(art_var)
                 artificial_count += 1
+            
             row[-1] = self.b[i]
             self.tableau.append(row)
 
-        # Phase I objective: minimize sum of artificial variables
+        # Create Phase I objective row (minimize sum of artificial variables)
         phase_I_obj = [Fraction(0)] * (self.n + 1)
-        for art_var in self.artificial_vars:
-            phase_I_obj[art_var] = Fraction(-1)
+        
+        # For each artificial variable in basis, add its row to objective
+        for i, basic_var in enumerate(self.basis):
+            if basic_var in self.artificial_vars:
+                for j in range(len(phase_I_obj)):
+                    phase_I_obj[j] -= self.tableau[i][j]
+                    
         self.tableau.append(phase_I_obj)
 
     def build_initial_tableau_phase_II(self):
         """
-        Build Phase II tableau from Phase I solution with improved handling of artificial variables.
+        Build initial tableau for Phase II.
+        We always solve minimization problems internally.
         """
-        # First check if Phase I objective value is zero (feasible solution)
-        if abs(self.tableau[-1][-1]) > self.tolerance:
-            raise InfeasibleProblemError("Phase I did not reach zero objective value")
-
-        # For each artificial variable in the basis
-        artificial_in_basis = [(i, var) for i, var in enumerate(self.basis) if var in self.artificial_vars]
-        
-        for row_idx, art_var in artificial_in_basis:
-            if abs(self.tableau[row_idx][-1]) > self.tolerance:
-                # If artificial variable has non-zero value, try to pivot it out
-                pivot_found = False
-                
-                # Look for a non-artificial variable to pivot in
-                for j in range(self.n_vars):  # Only look at original variables
-                    if j not in self.basis and abs(self.tableau[row_idx][j]) > self.tolerance:
-                        # Found a potential pivot element
-                        pivot_value = self.tableau[row_idx][j]
-                        
-                        # Check if this pivot maintains feasibility
-                        feasible = True
-                        for i in range(self.m):
-                            if i != row_idx and self.tableau[i][j] != 0:
-                                new_value = self.tableau[i][-1] - (self.tableau[i][j] * self.tableau[row_idx][-1] / pivot_value)
-                                if new_value < -self.tolerance:
-                                    feasible = False
-                                    break
-                        
-                        if feasible:
-                            # Perform the pivot
-                            self.tableau[row_idx] = [elem / pivot_value for elem in self.tableau[row_idx]]
-                            for i in range(self.m + 1):
-                                if i != row_idx:
-                                    factor = self.tableau[i][j]
-                                    self.tableau[i] = [self.tableau[i][k] - factor * self.tableau[row_idx][k] 
-                                                    for k in range(len(self.tableau[i]))]
-                            self.basis[row_idx] = j
-                            pivot_found = True
-                            break
-                            
-                if not pivot_found:
-                    raise InfeasibleProblemError("Unable to remove artificial variable from basis")
-
-        # Remove artificial variables from the tableau
+        # Remove artificial variables
         indices_to_keep = [j for j in range(self.n + 1) if j not in self.artificial_vars]
         new_tableau = []
-        for row in self.tableau[:-1]:  # Exclude the objective row
+        for row in self.tableau[:-1]:
             new_row = [row[j] for j in indices_to_keep]
             new_tableau.append(new_row)
         
-        # Update tableau dimensions
-        self.n = len(indices_to_keep) - 1  # Subtract 1 for RHS column
+        self.n = len(indices_to_keep) - 1
         self.tableau = new_tableau
-
-        # Build new objective row for Phase II
+        
+        # Build objective row
         objective = [Fraction(0)] * (self.n + 1)
+        
+        # Set initial coefficients for original variables
         for j in range(self.n_vars):
-            objective[j] = self.c[j] if self.problem_type == 'min' else -self.c[j]
-            
-        # Express objective in terms of basic variables
+            objective[j] = self.c[j]
+        
+        # Adjust objective row based on basic variables
         for i in range(self.m):
-            if self.basis[i] < self.n_vars:  # Only for original variables in basis
-                coef = self.c[self.basis[i]] if self.problem_type == 'min' else -self.c[self.basis[i]]
-                objective[-1] += coef * self.tableau[i][-1]
+            if self.basis[i] < self.n_vars:
+                coef = self.c[self.basis[i]]
                 for j in range(self.n):
-                    objective[j] -= coef * self.tableau[i][j]
-                    
+                    objective[j] += coef * self.tableau[i][j]
+                objective[-1] += coef * self.tableau[i][-1]
+        
         self.tableau.append(objective)
 
     def is_optimal_phase_I(self):
@@ -170,90 +166,72 @@ class Simplex:
         return True
 
     def is_optimal_phase_II(self):
-        """Check if Phase II solution is optimal"""
-        reduced_costs = self.tableau[-1][:-1]
-        if self.problem_type == 'min':
-            return all(rc >= -self.tolerance for rc in reduced_costs)
-        else:  # max
-            return all(rc <= self.tolerance for rc in reduced_costs)
+        """
+        Check if Phase II solution is optimal.
+        For minimization problems: check if all reduced costs are ≥ 0
+        """
+        reduced_costs = self.tableau[-1][:-1]  # Exclude RHS
+        return all(rc >= -self.tolerance for rc in reduced_costs)
         
     def primal_simplex_step(self, phase):
-        """
-        Perform one step of the primal simplex method using Bland's rule to prevent cycling.
+        """Perform one step of the primal simplex method"""
+        reduced_costs = self.tableau[-1][:-1]
         
-        Parameters:
-        -----------
-        phase : int
-            1 for Phase I, 2 for Phase II
+        if phase == 1:
+            if self.is_optimal_phase_I():
+                return False
+            # Phase I: Select most positive reduced cost
+            entering_var = max(range(len(reduced_costs)), 
+                            key=lambda j: reduced_costs[j])
+            if reduced_costs[entering_var] <= self.tolerance:
+                return False
+        else:  # Phase II
+            if self.is_optimal_phase_II():
+                return False
             
-        Returns:
-        --------
-        bool
-            True if a pivot was performed, False if the solution is optimal
-        
-        Raises:
-        -------
-        UnboundedProblemError
-            If the problem is determined to be unbounded
-        """
-        # Check if current solution is optimal
-        if phase == 1 and self.is_optimal_phase_I():
-            return False
-        if phase == 2 and self.is_optimal_phase_II():
-            return False
-        
-        # Bland's Rule Step 1: Choose entering variable
-        # Select smallest index j where reduced cost is favorable
-        entering_var = -1
-        for j in range(len(self.tableau[-1]) - 1):  # Exclude RHS
-            reduced_cost = self.tableau[-1][j]
-            if phase == 1:
-                if reduced_cost > self.tolerance:
-                    entering_var = j
-                    break
-            else:  # phase == 2
-                if ((self.problem_type == 'max' and reduced_cost > self.tolerance) or 
-                    (self.problem_type == 'min' and reduced_cost < -self.tolerance)):
-                    entering_var = j
-                    break
-                    
-        if entering_var == -1:
-            return False  # No entering variable found - optimal solution reached
-            
-        # Bland's Rule Step 2: Choose leaving variable
-        # Among all candidates that pass minimum ratio test, select smallest index
+            # For minimization: select most negative reduced cost
+            entering_var = min(range(len(reduced_costs)), 
+                            key=lambda j: reduced_costs[j])
+            if reduced_costs[entering_var] >= -self.tolerance:
+                return False
+
+        # Find leaving variable using minimum ratio test
         min_ratio = float('inf')
-        leaving_candidates = []  # Store all candidates that pass minimum ratio test
+        leaving_var = -1
         
         for i in range(self.m):
             if self.tableau[i][entering_var] > self.tolerance:
-                ratio = self.tableau[i][-1] / self.tableau[i][entering_var]
-                if abs(ratio - min_ratio) < self.tolerance:
-                    leaving_candidates.append((i, self.basis[i]))
-                elif ratio < min_ratio:
+                ratio = float(self.tableau[i][-1]) / float(self.tableau[i][entering_var])
+                if ratio < min_ratio and ratio >= 0:
                     min_ratio = ratio
-                    leaving_candidates = [(i, self.basis[i])]
-                    
-        if not leaving_candidates:
+                    leaving_var = i
+        
+        if leaving_var == -1:
             raise UnboundedProblemError()
-            
-        # Select the candidate with the smallest basic variable index
-        leaving_row = min(leaving_candidates, key=lambda x: x[1])[0]
         
-        # Perform pivot operation
-        pivot_value = self.tableau[leaving_row][entering_var]
-        self.tableau[leaving_row] = [elem / pivot_value for elem in self.tableau[leaving_row]]
+        self._pivot(leaving_var, entering_var)
+        return True
+    
+    def _pivot(self, leaving_var, entering_var):
+        """
+        Perform pivot operation at the specified position.
+        This is extracted as a separate method for clarity and reuse.
+        """
+        # Normalize the pivot row
+        pivot_value = self.tableau[leaving_var][entering_var]
+        self.tableau[leaving_var] = [elem / pivot_value for elem in self.tableau[leaving_var]]
         
+        # Update all other rows
         for i in range(len(self.tableau)):
-            if i != leaving_row:
+            if i != leaving_var:
                 factor = self.tableau[i][entering_var]
                 self.tableau[i] = [
-                    self.tableau[i][j] - factor * self.tableau[leaving_row][j]
+                    self.tableau[i][j] - factor * self.tableau[leaving_var][j]
                     for j in range(len(self.tableau[i]))
                 ]
-                
-        self.basis[leaving_row] = entering_var
-        return True
+        
+        # Update basis
+        self.basis[leaving_var] = entering_var
 
     def solve(self):
         """Solve using two-phase simplex method"""
@@ -290,23 +268,21 @@ class Simplex:
         return solution
 
     def get_solution(self):
-        """
-        Extract the solution from the final tableau.
-        Returns:
-        - List of values for the original variables
-        - Optimal objective value
-        """
-        solution = [Fraction(0) for _ in range(self.n_vars)]
+        """Extract solution from final tableau"""
+        solution = [Fraction(0)] * self.n_vars
         
         for i in range(self.m):
-            var = self.basis[i]
-            if var < self.n_vars:
-                solution[var] = self.tableau[i][-1]
+            if self.basis[i] < self.n_vars:
+                solution[self.basis[i]] = self.tableau[i][-1]
         
-        obj_value = sum(self.c[i] * solution[i] for i in range(self.n_vars))
+        # Calculate objective value using original coefficients
+        obj_value = sum(self.c[j] * solution[j] for j in range(self.n_vars))
         
-        return [float(x) for x in solution], float(obj_value)
+        if self.problem_type == "max":
+            obj_value = -obj_value
 
+        return [float(x) for x in solution], float(obj_value)
+    
     def dual_simplex_step(self):
         """
         Perform one step of the dual simplex method.
@@ -366,76 +342,53 @@ class Simplex:
         return True
 
     def display_table(self):
-        """
-        Display the current tableau in a formatted table with z-values row.
-        Respects the display_type setting ('fraction' or 'decimal').
-        """
+        """Display the current tableau with proper z-row calculations"""
         def format_number(num):
-            """Helper function to format numbers according to display_type"""
             if self.display_type == 'decimal':
                 return f"{float(num):.6f}"
-            else:  # fraction
+            else:
                 return (f"{num.numerator}" if num.denominator == 1 
                     else f"{num.numerator}/{num.denominator}")
-
-        # Extract reduced costs (last row excluding RHS)
-        reduced_costs = self.tableau[-1][:-1]
         
-        # Calculate z values for each column
-        z_values = []
-        for j in range(len(self.tableau[0])-1):  # Exclude RHS column
-            z_val = Fraction(0)
-            for i in range(self.m):  # For each basic variable
-                # Get the objective coefficient for the basic variable
+        # Calculate z-row values
+        z_row = [Fraction(0)] * (self.n + 1)
+        for j in range(self.n + 1):
+            for i in range(self.m):
                 if self.basis[i] < self.n_vars:
-                    c_i = self.c[self.basis[i]]
-                else:
-                    c_i = Fraction(0)  # Slack variables have zero objective coefficient
-                # Multiply by the column coefficient and add to sum
-                z_val += c_i * self.tableau[i][j]
-            z_values.append(z_val)
+                    coef = self.c[self.basis[i]]
+                    z_row[j] += coef * self.tableau[i][j]
         
-        # Prepare the table data
+        # Calculate reduced costs
+        reduced_costs = []
+        for j in range(self.n):
+            if j < self.n_vars:
+                rc = -self.c[j] - self.tableau[-1][j]  # Using tableau's objective row
+            else:
+                rc = -self.tableau[-1][j]
+            reduced_costs.append(rc)
+        
+        # Prepare table data
         table_data = []
-        for i, row in enumerate(self.tableau[:-1]):
-            basis_var = f"x{self.basis[i]+1}" if self.basis[i] < self.n_vars else f"s{self.basis[i]-self.n_vars+1}"
-            row_display = [basis_var] + [format_number(elem) for elem in row]
-            table_data.append(row_display)
+        z_row_display = ["z"] + [format_number(z) for z in z_row]
+        table_data.append(z_row_display)
+        rc_row = ["z-c"] + [format_number(rc) for rc in reduced_costs] + [""]
+        table_data.append(rc_row)
+        c_row = ["c"] + [format_number(c) for c in self.c] + ["0"] * (self.n - self.n_vars) + [""]
+        table_data.append(c_row)
+        table_data.append(["---"] * (self.n + 2))
         
-        # Calculate and add the current objective value for z row
-        obj_value = Fraction(0)
+        # Add basic variable rows
         for i in range(self.m):
-            if self.basis[i] < self.n_vars:  # Only consider original variables, not slack
-                c_i = self.c[self.basis[i]]
-                b_i = self.tableau[i][-1]
-                obj_value += c_i * b_i
+            basis_var = f"x{self.basis[i]+1}" if self.basis[i] < self.n_vars else f"s{self.basis[i]-self.n_vars+1}"
+            row_data = [basis_var] + [format_number(x) for x in self.tableau[i]]
+            table_data.append(row_data)
+        
+        # Create headers and print
+        headers = ["Basis"] + [f"x{i+1}" for i in range(self.n_vars)] + \
+                 [f"s{i+1}" for i in range(self.m)] + ["b"]
+        print(tabulate(table_data, headers=headers, tablefmt="outline", stralign="center"))
+        print(f"Current basis: {set(f'x{self.basis[i]+1}' if self.basis[i] < self.n_vars else f's{self.basis[i]-self.n_vars+1}' for i in range(self.m))}")
 
-        # Add the z values row with objective value
-        z_row = ["z"] + [format_number(z) for z in z_values] + [format_number(obj_value)]
-        
-        # Add the reduced costs row
-        reduced_costs_row = ["z-c"] + [format_number(rc) for rc in reduced_costs] + [""]
-        
-        # Create c values row (original objective coefficients)
-        c_row = ["c"] + [format_number(c) for c in self.c] + ["0"] * self.m + [""]
-
-        # Create table rows in specific order
-        header = ["Basis"] + [f"x{i+1}" for i in range(self.n_vars)] + [f"s{i+1}" for i in range(self.m)] + ["b"]
-        
-        # Combine all rows in desired order
-        all_rows = [header, z_row, reduced_costs_row, c_row] + table_data
-        
-        # Insert a separator row after the c row
-        separator_row = ["---"] * len(header)
-        all_rows.insert(4, separator_row)
-        
-        # Print the table using tabulate
-        print(tabulate(all_rows, headers="firstrow", tablefmt="outline", stralign="center"))
-        
-        # Print the current basis in a set
-        basis_set = {f"x{self.basis[i]+1}" if self.basis[i] < self.n_vars else f"s{self.basis[i]-self.n_vars+1}" 
-                    for i in range(self.m)}
-        print(f"Current basis: {basis_set}")
 
     def display_final_results(self, solution):
         """
@@ -467,19 +420,20 @@ class Simplex:
 def main():
     # Test Case: Simple maximization problem
     print("Test Case: Simple maximization problem")
-    c = [2, 1]
+    c = [1, 1]
     A = [
-        [1, -1],
+        [1, 1],
         [1, 1],
     ]
-    b = [1, 2]
+    b = [3, -1]
     n_vars = 2
-    constraint_types = ['<=', '=']
+    constraint_types = ['>=', '<=']
+    problem_type = "max"
     
     # Example with all output
     print("\nExample with all output:")
-    simplex = Simplex(c, A, b, n_vars, show_iterations=True, show_final_results=True, display_type='fraction', 
-                      problem_type="min", constraint_types=constraint_types)
+    simplex = Simplex(c, A, b, n_vars, show_iterations=True, show_final_results=True, display_type='decimal', 
+                      problem_type=problem_type, constraint_types=constraint_types)
     simplex.solve()
 
 def verify(c, A, b):
