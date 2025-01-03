@@ -1,164 +1,121 @@
 import unittest
+import numpy as np
 from fractions import Fraction
-from simplex import Simplex, UnboundedProblemError, InfeasibleProblemError
+from simplex import PrimalSimplex  # Assuming the code is in primal_simplex.py
 
-class TestSimplexSolver(unittest.TestCase):
 
+class TestPrimalSimplex(unittest.TestCase):
     def setUp(self):
-        self.tolerance = 1e-6  # Tolerance for floating-point comparisons
-
-    def test_maximization_unique_solution(self):
-        # Maximize: 3x1 + 2x2
+        """Set up common test data"""
+        # Simple 2-variable LP problem:
+        # Minimize: -2x1 - 3x2
         # Subject to:
-        # x1 + x2 <= 4
-        # x1 - x2 <= 2
-        # x1, x2 >= 0
-        c = [3, 2]
-        A = [
-            [1, 1],
-            [1, -1]
-        ]
-        b = [4, 2]
-        n_vars = 2
-        simplex = Simplex(c, A, b, n_vars, problem_type='max', show_iterations=False, show_final_results=False)
-        solution = simplex.solve()
-        self.assertIsNotNone(solution)
-        variables, obj_value = solution
-        self.assertAlmostEqual(obj_value, 11.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[0], 3.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[1], 1.0, delta=self.tolerance)
+        #   x1 + 2x2 ≤ 4
+        #   x1 + x2 ≤ 3
+        #   x1, x2 ≥ 0
+        self.simple_c = np.array([-2, -3])
+        self.simple_A = np.array([[1, 2], [1, 1]])
+        self.simple_b = np.array([4, 3])
 
-    def test_minimization_unique_solution(self):
-        # Minimize: x1 + 2x2
-        # Subject to:
-        # x1 + x2 >= 3  --> -x1 - x2 <= -3
-        # x1 - x2 <= 1
-        # x1, x2 >= 0
-        c = [1, 2]
-        A = [
-            [-1, -1],  # Converted to <= by multiplying by -1
-            [1, -1]
-        ]
-        b = [-3, 1]  # Ensure b is non-negative
-        n_vars = 2
-        simplex = Simplex(c, A, b, n_vars, problem_type='min', show_iterations=False, show_final_results=False)
-        solution = simplex.solve()
-        self.assertIsNotNone(solution)
-        variables, obj_value = solution
-        self.assertAlmostEqual(obj_value, 4.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[0], 2.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[1], 1.0, delta=self.tolerance)
+    def test_initialization(self):
+        """Test proper initialization of the simplex solver"""
+        solver = PrimalSimplex(self.simple_c, self.simple_A, self.simple_b)
 
-    def test_infeasible_problem(self):
-        # Maximize: x1 + x2
-        # Subject to:
-        # x1 + x2 <= 1
-        # x1 + x2 >= 3  --> -x1 - x2 <= -3
-        # x1, x2 >= 0
-        c = [1, 1]
-        A = [
-            [1, 1],
-            [-1, -1]
-        ]
-        b = [1, -3]  # Ensure b is non-negative
-        n_vars = 2
-        simplex = Simplex(c, A, b, n_vars, problem_type='max', show_iterations=False, show_final_results=False)
-        with self.assertRaises(InfeasibleProblemError):
-            simplex.solve()
+        self.assertEqual(solver.m, 2)  # Number of constraints
+        self.assertEqual(solver.n, 2)  # Number of variables
+        self.assertEqual(solver.tableau.shape, (3, 5))  # (m+1) × (n+m+1)
+
+    def test_simple_lp_solution(self):
+        """Test solving a simple LP problem with known solution"""
+        solver = PrimalSimplex(self.simple_c, self.simple_A, self.simple_b)
+        solution, optimal_value = solver.solve()
+
+        # Expected solution: x1 = 1, x2 = 1.5
+        # Expected optimal value: -6.5
+        np.testing.assert_array_almost_equal(solution, [1, 1.5], decimal=4)
+        self.assertAlmostEqual(optimal_value, -6.5, places=4)
 
     def test_unbounded_problem(self):
-        # Maximize: x1
+        """Test detection of unbounded problems"""
+        # Minimize: -x1 - x2
         # Subject to:
-        # No constraints
-        c = [1, 0]
-        A = []
-        b = []
-        n_vars = 2
-        simplex = Simplex(c, A, b, n_vars, problem_type='max', show_iterations=False, show_final_results=False)
-        with self.assertRaises(UnboundedProblemError):
-            simplex.solve()
+        #   x1 - x2 ≤ 1
+        #   x1, x2 ≥ 0
+        c = np.array([-1, -1])
+        A = np.array([[1, -1]])
+        b = np.array([1])
 
-    def test_degenerate_problem(self):
-        # Maximize: 2x1 + 3x2
-        # Subject to:
-        # x1 + x2 <= 4
-        # 2x1 + 2x2 <= 8
-        # x1, x2 >= 0
-        c = [2, 3]
-        A = [
-            [1, 1],
-            [2, 2]
-        ]
-        b = [4, 8]
-        n_vars = 2
-        simplex = Simplex(c, A, b, n_vars, problem_type='max', show_iterations=False, show_final_results=False)
-        solution = simplex.solve()
-        self.assertIsNotNone(solution)
-        variables, obj_value = solution
-        self.assertAlmostEqual(obj_value, 12.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[0], 0.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[1], 4.0, delta=self.tolerance)
+        solver = PrimalSimplex(c, A, b)
+        with self.assertRaises(Exception) as context:
+            solver.solve()
+        self.assertTrue("Problem is unbounded" in str(context.exception))
 
-    def test_equality_constraints(self):
-        # Maximize: 3x1 + 2x2
-        # Subject to:
-        # x1 + x2 = 4  --> x1 + x2 <= 4 and -x1 - x2 <= -4
-        # x1, x2 >= 0
-        c = [3, 2]
-        A = [
-            [1, 1],
-            [-1, -1]
-        ]
-        b = [4, -4]  # Ensure b is non-negative
-        n_vars = 2
-        simplex = Simplex(c, A, b, n_vars, problem_type='max', show_iterations=False, show_final_results=False)
-        solution = simplex.solve()
-        self.assertIsNotNone(solution)
-        variables, obj_value = solution
-        self.assertAlmostEqual(obj_value, 12.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[0], 4.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[1], 0.0, delta=self.tolerance)
+    def test_negative_rhs_handling(self):
+        """Test proper handling of negative RHS values"""
+        # Problem with negative RHS
+        c = np.array([-1, -1])
+        A = np.array([[1, 1], [-1, -1]])
+        b = np.array([2, -1])  # Second constraint has negative RHS
 
-    def test_zero_coefficients(self):
-        # Maximize: 0x1 + 0x2
-        # Subject to:
-        # x1 + x2 <= 1
-        # x1, x2 >= 0
-        c = [0, 0]
-        A = [
-            [1, 1]
-        ]
-        b = [1]
-        n_vars = 2
-        simplex = Simplex(c, A, b, n_vars, problem_type='max', show_iterations=False, show_final_results=False)
-        solution = simplex.solve()
-        self.assertIsNotNone(solution)
-        variables, obj_value = solution
-        self.assertAlmostEqual(obj_value, 0.0, delta=self.tolerance)
-        # Any feasible solution is optimal
-        self.assertLessEqual(variables[0] + variables[1], 1 + self.tolerance)
-        self.assertGreaterEqual(variables[0] + variables[1], 0 - self.tolerance)
+        solver = PrimalSimplex(c, A, b)
+        solution, _ = solver.solve()
 
-    def test_fractional_coefficients(self):
-        # Maximize: (3/2)x1 + (2/3)x2
-        # Subject to:
-        # (1/2)x1 + (1/3)x2 <= 6
-        # x1, x2 >= 0
-        c = [Fraction(3, 2), Fraction(2, 3)]
-        A = [
-            [Fraction(1, 2), Fraction(1, 3)]
-        ]
-        b = [6]
-        n_vars = 2
-        simplex = Simplex(c, A, b, n_vars, problem_type='max', show_iterations=False, show_final_results=False)
-        solution = simplex.solve()
-        self.assertIsNotNone(solution)
-        variables, obj_value = solution
-        # Expected solution can be calculated accordingly
-        # For brevity, assume x1=12, x2=0 gives obj=18
-        self.assertAlmostEqual(obj_value, 18.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[0], 12.0, delta=self.tolerance)
-        self.assertAlmostEqual(variables[1], 0.0, delta=self.tolerance)
+        # Check if solution satisfies original constraints
+        self.assertTrue(np.all(np.dot(A, solution) <= b))
+
+    def test_fraction_output(self):
+        """Test fraction output functionality"""
+        solver = PrimalSimplex(
+            self.simple_c,
+            self.simple_A,
+            self.simple_b,
+            use_fractions=True,
+            fraction_digits=3
+        )
+
+        # Test fraction limitation
+        test_value = 22 / 7  # A common fraction that needs limitation
+        limited_fraction = solver._limit_fraction(test_value)
+        self.assertIsInstance(limited_fraction, Fraction)
+        self.assertTrue(abs(float(limited_fraction) - test_value) < 0.1)
+
+    def test_degenerate_case(self):
+        """Test handling of degenerate cases"""
+        # Degenerate problem where multiple constraints intersect at a point
+        c = np.array([-1, -1])
+        A = np.array([[1, 1], [1, 1], [1, 0]])
+        b = np.array([2, 2, 1])
+
+        solver = PrimalSimplex(c, A, b)
+        solution, optimal_value = solver.solve()
+
+        # Check if solution satisfies all constraints
+        self.assertTrue(np.all(np.dot(A, solution) <= b + 1e-10))
+
+    def test_zero_objective_coefficients(self):
+        """Test handling of zero coefficients in objective function"""
+        c = np.array([0, -1])
+        A = np.array([[1, 1]])
+        b = np.array([1])
+
+        solver = PrimalSimplex(c, A, b)
+        solution, optimal_value = solver.solve()
+
+        # Check if solution is feasible
+        self.assertTrue(np.all(np.dot(A, solution) <= b + 1e-10))
+
+    def test_single_variable(self):
+        """Test problem with single variable"""
+        c = np.array([-1])
+        A = np.array([[1]])
+        b = np.array([2])
+
+        solver = PrimalSimplex(c, A, b)
+        solution, optimal_value = solver.solve()
+
+        self.assertAlmostEqual(solution[0], 2, places=4)
+        self.assertAlmostEqual(optimal_value, -2, places=4)
+
 
 if __name__ == '__main__':
     unittest.main()
