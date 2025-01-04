@@ -5,6 +5,14 @@ from tabulate import tabulate
 from simplex import PrimalSimplex  # Assuming the class is in primal_simplex.py
 import pandas as pd
 
+
+class SolutionStorage:
+    def __init__(self, decimal_solution, decimal_optimal, fraction_solution, fraction_optimal):
+        self.decimal_solution = decimal_solution
+        self.decimal_optimal = decimal_optimal
+        self.fraction_solution = fraction_solution
+        self.fraction_optimal = fraction_optimal
+
 def create_example_problem():
     """Create a simple example LP problem"""
     c = np.array([-3, -2, -4, -1, -5])
@@ -16,6 +24,35 @@ def create_example_problem():
     ])
     b = np.array([10, 8, 12, 6])
     return c, A, b
+
+
+def format_lp_problem(c, A, b, n, m):
+    latex = r"\begin{align*}"
+
+    # Objective function
+    obj_terms = ' '.join([f'{c[i]:+}x_{i + 1}' if c[i] >= 0 else f'{c[i]}x_{i + 1}' for i in range(n)])
+    latex += f"\\min \\quad & z = {obj_terms} \\\\[1em]"  # Add vertical space here
+
+    # Add s.t. aligned under min
+    latex += r"\text{s.t.} \quad & "
+
+    # Add the first constraint
+    constraint = f"{' + '.join([f'{A[0, j]}x_{j + 1}' for j in range(n)])} \\leq {b[0]}"
+    latex += f"\qquad {constraint} \\\\"
+
+    # Add the remaining constraints, each aligned with the s.t.
+    for i in range(1, m):
+        constraint = f"{' + '.join([f'{A[i, j]}x_{j + 1}' for j in range(n)])} \\leq {b[i]}"
+        latex += f"& \qquad {constraint} \\\\"
+
+    # Add non-negativity constraint
+    latex += r"& \qquad x_i \geq 0 \quad \forall i"
+
+    # Close environment
+    latex += r"\end{align*}"
+
+    return latex
+
 
 def display_matrix(matrix, name):
     """Display a matrix/vector in a more readable format"""
@@ -34,19 +71,29 @@ def validate_inputs(c, A, b):
         return False, "Invalid input format"
 
 
-def display_iteration(iteration, tableau, solver, use_fractions):
-    """Display the tableau for a given iteration"""
+def display_iteration(iteration, tableau, solver, use_fractions, fraction_digits=3):
+    """Display the tableau for a given iteration with proper fraction digit limiting"""
     st.write(f"**Iteration {iteration}**")
 
     # Create DataFrame for display
     headers = [""] + [f"x{i + 1}" for i in range(solver.n)] + \
               [f"s{i + 1}" for i in range(solver.m)] + ["RHS"]
 
-    # Format tableau data
-    if use_fractions:
-        formatted_data = np.vectorize(lambda x: str(solver._limit_fraction(Fraction(x))))(tableau)
-    else:
-        formatted_data = np.vectorize(lambda x: f"{x:.4f}")(tableau)
+    # Format tableau data with proper fraction digit limiting
+    def format_value(x):
+        if use_fractions:
+            frac = solver._limit_fraction(Fraction(float(x)))
+            # Get numerator and denominator
+            num, den = frac.numerator, frac.denominator
+            # Limit the size of both numerator and denominator based on fraction_digits
+            max_value = 10 ** fraction_digits
+            if abs(num) > max_value or den > max_value:
+                return f"{float(x):.{fraction_digits}f}"
+            return str(frac)
+        else:
+            return f"{float(x):.4f}"
+
+    formatted_data = np.vectorize(format_value)(tableau)
 
     # Create rows with labels
     rows = []
@@ -56,20 +103,20 @@ def display_iteration(iteration, tableau, solver, use_fractions):
 
     df = pd.DataFrame(rows, columns=headers)
 
-    # Style the DataFrame
+    # Style the DataFrame (rest remains the same)
     styled_df = df.style.set_properties(**{
         'text-align': 'right',
         'font-family': 'monospace',
         'padding': '5px 10px',
-        'color': '#000000',  # Black text color
-        'background-color': '#f8f9fa',  # Light background
+        'color': '#000000',
+        'background-color': '#f8f9fa',
         'border': '1px solid #dee2e6'
     }).set_table_styles([
         {
             'selector': 'th',
             'props': [
-                ('background-color', '#e9ecef'),  # Slightly darker header background
-                ('color', '#000000'),  # Black header text
+                ('background-color', '#e9ecef'),
+                ('color', '#000000'),
                 ('font-weight', 'bold'),
                 ('text-align', 'center'),
                 ('padding', '5px 10px'),
@@ -83,11 +130,6 @@ def display_iteration(iteration, tableau, solver, use_fractions):
             ]
         }
     ])
-
-    # Add zebra-striping for better readability
-    styled_df = styled_df.apply(lambda _: ['background-color: #ffffff' if i % 2 == 0
-                                           else 'background-color: #f8f9fa' for i in range(len(df))],
-                                axis=0)
 
     st.write(styled_df)
 
@@ -104,7 +146,33 @@ def display_iteration(iteration, tableau, solver, use_fractions):
     basis_latex = "\\text{Current Basis: } \\mathcal{B} = \\{" + ", ".join(latex_basis) + "\\}"
     st.latex(basis_latex)
 
+def display_solution(use_fractions):
+    """Display the solution in either fraction or decimal format"""
+    storage = st.session_state.solution_storage
+
+    st.markdown("### Optimal Solution")
+    solution_latex = "\\begin{align*}\n"
+
+    if use_fractions:
+        solution_vector = " \\\\ ".join(storage.fraction_solution)
+        solution_latex += f"\\mathbf{{x}}^* = \\begin{{pmatrix}} {solution_vector} \\end{{pmatrix}} & \\qquad & z^* = {storage.fraction_optimal}"
+    else:
+        solution_vector = " \\\\ ".join([f"{val:.4f}" for val in storage.decimal_solution])
+        solution_latex += f"\\mathbf{{x}}^* = \\begin{{pmatrix}} {solution_vector} \\end{{pmatrix}} & \\qquad & z^* = {storage.decimal_optimal:.4f}"
+
+    solution_latex += "\\end{align*}"
+    st.latex(solution_latex)
+
+
 def main():
+    # Initialize session state variables if they don't exist
+    if 'solution_storage' not in st.session_state:
+        st.session_state.solution_storage = None
+    if 'tableaus' not in st.session_state:
+        st.session_state.tableaus = []  # Will store tuples of (iteration, tableau, solver)
+    if 'has_solved' not in st.session_state:
+        st.session_state.has_solved = False
+
     st.title("Linear Programming Solver")
     st.write("Solve linear programming problems using the Primal Simplex method")
 
@@ -112,7 +180,7 @@ def main():
     st.sidebar.header("Problem Setup")
 
     # Option to use example problem
-    use_example = st.sidebar.checkbox("Use example problem")
+    use_example = st.sidebar.checkbox("Use example problem", key='use_example')
 
     if use_example:
         c, A, b = create_example_problem()
@@ -120,12 +188,12 @@ def main():
     else:
         # Get dimensions
         col1, col2 = st.sidebar.columns(2)
-        m = col1.number_input("Number of constraints (m)", min_value=1, value=3)
-        n = col2.number_input("Number of variables (n)", min_value=1, value=2)
+        m = col1.number_input("Number of constraints (m)", min_value=1, value=3, key='m')
+        n = col2.number_input("Number of variables (n)", min_value=1, value=2, key='n')
 
         # Input for objective function coefficients
         st.sidebar.subheader("Objective Function Coefficients (c)")
-        c_input = st.sidebar.text_input("Enter c values (comma-separated)", "2,3")
+        c_input = st.sidebar.text_input("Enter c values (comma-separated)", "2,3", key='c_input')
         try:
             c = np.array([float(x.strip()) for x in c_input.split(",")])
         except:
@@ -134,10 +202,10 @@ def main():
 
         # Input for constraint matrix A
         st.sidebar.subheader("Constraint Matrix (A)")
-        A = np.zeros((m, n))
         A_input = st.sidebar.text_area(
             "Enter A matrix (one row per line, comma-separated)",
-            "1,2\n2,1\n1,1"
+            "1,2\n2,1\n1,1",
+            key='A_input'
         )
         try:
             A = np.array([
@@ -150,21 +218,25 @@ def main():
 
         # Input for RHS values
         st.sidebar.subheader("Right Hand Side (b)")
-        b_input = st.sidebar.text_input("Enter b values (comma-separated)", "10,8,5")
+        b_input = st.sidebar.text_input("Enter b values (comma-separated)", "10,8,5", key='b_input')
         try:
             b = np.array([float(x.strip()) for x in b_input.split(",")])
         except:
             st.error("Invalid input for RHS values")
             return
 
+    # Store current problem parameters
+    st.session_state.problem_params = (c, A, b)
+
     # Fraction display options
-    use_fractions = st.sidebar.checkbox("Use fractions", value=True)
+    use_fractions = st.sidebar.checkbox("Use fractions", value=True, key='use_fractions')
     fraction_digits = st.sidebar.number_input(
         "Maximum fraction digits",
         min_value=1,
         max_value=5,
         value=3,
-        disabled=not use_fractions
+        disabled=not use_fractions,
+        key='fraction_digits'
     )
 
     # Validate inputs
@@ -175,25 +247,22 @@ def main():
 
     # Display the problem
     st.header("Problem Formulation")
-    st.write("Minimize:")
-    st.latex(f"z = {' + '.join([f'{c[i]}x_{i + 1}' for i in range(n)])}")
-
-    st.write("Subject to:")
-    for i in range(m):
-        st.latex(f"{' + '.join([f'{A[i, j]}x_{j + 1}' for j in range(n)])} \\leq {b[i]}")
-    st.latex("x_i \\geq 0 \\quad \\forall i")
+    st.latex(format_lp_problem(c, A, b, n, m))
 
     # Solve button
-    if st.button("Solve"):
+    if st.button("Solve", key='solve_button'):
+        st.session_state.has_solved = True
+        # Clear previous tableaus when solving new problem
+        st.session_state.tableaus = []
+
         st.header("Solution")
         try:
-            # Create solver instance
-            solver = PrimalSimplex(c, A, b, use_fractions=use_fractions, fraction_digits=fraction_digits)
+            # Create solver instance with fractions
+            solver = PrimalSimplex(c, A, b, use_fractions=True, fraction_digits=fraction_digits)
 
-            # Initialize tableau display
-            st.markdown("### Solution Progress")
+            # Store initial tableau
             iteration = 0
-            display_iteration(iteration, solver.tableau, solver, use_fractions)
+            st.session_state.tableaus.append((iteration, solver.tableau.copy(), solver))
 
             # Solve step by step
             while True:
@@ -207,44 +276,64 @@ def main():
                     st.error("Problem is unbounded")
                     return
 
-                # Show pivot information with latex variables
                 st.write(f"Pivot: Entering Variable = $x_{pivot_col + 1}$, Leaving Row = $R_{pivot_row}$")
-
-                # Perform pivot
                 solver._pivot(pivot_row, pivot_col)
                 iteration += 1
-                display_iteration(iteration, solver.tableau, solver, use_fractions)
+                st.session_state.tableaus.append((iteration, solver.tableau.copy(), solver))
 
-            # Extract solution
-            solution = np.zeros(solver.n)
+            # Extract decimal solution
+            decimal_solution = np.zeros(solver.n)
             for i in range(solver.n):
                 col = solver.tableau[:, i]
                 if np.sum(col == 1) == 1 and np.sum(col == 0) == solver.m:
                     row_idx = np.where(col == 1)[0][0]
                     if row_idx < len(solver.tableau):
-                        solution[i] = solver.tableau[row_idx, -1]
+                        decimal_solution[i] = solver.tableau[row_idx, -1]
 
-            optimal_value = -solver.tableau[0, -1]
+            decimal_optimal = -solver.tableau[0, -1]
 
-            # Display solution in LaTeX format
-            st.markdown("### Optimal Solution")
+            # Calculate fraction solution
+            fraction_solution = []
+            for val in decimal_solution:
+                frac = solver._limit_fraction(Fraction(float(val)))
+                fraction_solution.append(str(frac))
 
-            # Create the solution vector in LaTeX format
-            solution_latex = "\\begin{align*}\n"
-            solution_latex += "\\mathbf{x}^* &= \\begin{pmatrix}\n"
-            solution_latex += " \\\\ ".join([f"{val:.4f}" for val in solution])
-            solution_latex += "\n\\end{pmatrix} \\\\\n"
-            solution_latex += f"z^* &= {optimal_value:.4f}\n"
-            solution_latex += "\\end{align*}"
+            fraction_optimal = str(solver._limit_fraction(Fraction(float(decimal_optimal))))
 
-            st.latex(solution_latex)
+            # Store solutions in session state
+            st.session_state.solution_storage = SolutionStorage(
+                decimal_solution,
+                decimal_optimal,
+                fraction_solution,
+                fraction_optimal
+            )
 
         except Exception as e:
             st.error(f"Error solving problem: {str(e)}")
-            st.write("Debug information:")
-            st.write(f"Tableau shape: {solver.tableau.shape if hasattr(solver, 'tableau') else 'N/A'}")
-            st.write(f"Number of variables (n): {solver.n if hasattr(solver, 'n') else 'N/A'}")
-            st.write(f"Number of constraints (m): {solver.m if hasattr(solver, 'm') else 'N/A'}")
+            return
+
+    # Display solution progress if available
+    if st.session_state.has_solved and st.session_state.tableaus:
+        st.markdown("### Solution Progress")
+        for iteration, tableau, solver in st.session_state.tableaus:
+            display_iteration(iteration, tableau, solver, use_fractions, fraction_digits)
+
+    # Display solution if available
+    if st.session_state.solution_storage is not None:
+        st.markdown("### Optimal Solution")
+        solution_latex = "\\begin{align*}\n"
+
+        if use_fractions:
+            solution_vector = " \\\\ ".join(st.session_state.solution_storage.fraction_solution)
+            solution_latex += f"\\mathbf{{x}}^* = \\begin{{pmatrix}} {solution_vector} \\end{{pmatrix}} & \\qquad & z^* = {st.session_state.solution_storage.fraction_optimal}"
+        else:
+            decimal_solution = st.session_state.solution_storage.decimal_solution
+            solution_vector = " \\\\ ".join([f"{val:.4f}" for val in decimal_solution])
+            solution_latex += f"\\mathbf{{x}}^* = \\begin{{pmatrix}} {solution_vector} \\end{{pmatrix}} & \\qquad & z^* = {st.session_state.solution_storage.decimal_optimal:.4f}"
+
+        solution_latex += "\\end{align*}"
+        st.latex(solution_latex)
+
 
 if __name__ == "__main__":
     main()
