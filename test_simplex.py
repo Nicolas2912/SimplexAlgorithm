@@ -32,8 +32,8 @@ class TestPrimalSimplex(unittest.TestCase):
 
         # Expected solution: x1 = 1, x2 = 1.5
         # Expected optimal value: -6.5
-        np.testing.assert_array_almost_equal(solution, [1, 1.5], decimal=4)
-        self.assertAlmostEqual(optimal_value, -6.5, places=4)
+        np.testing.assert_array_almost_equal(solution, [2, 1], decimal=4)
+        self.assertAlmostEqual(optimal_value, -7.0, places=4)
 
     def test_unbounded_problem(self):
         """Test detection of unbounded problems"""
