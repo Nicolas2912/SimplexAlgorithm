@@ -19,10 +19,22 @@ class PrimalSimplex:
         self.A = A
         self.b = b
         self.m, self.n = A.shape
+        self.rhs_negative = self._check_negative_rhs()
+
         self.use_fractions = use_fractions
         self.eq_constraints = eq_constraints
         self.tableau = self._initialize_tableau()
         self.fraction_digits = fraction_digits
+
+
+    def _check_negative_rhs(self):
+        """
+        Check if any of the constraints have negative RHS values.
+        """
+        for i in range(self.m):
+            if self.b[i] < 0:
+                return True
+        return False
 
 
     def _limit_fraction(self, value):
@@ -60,22 +72,38 @@ class PrimalSimplex:
 
     def _initialize_tableau(self):
         """
-        Initialize the simplex tableau based on constraint type (≤ or =)
+        Initialize the simplex tableau properly handling negative RHS values.
         """
-        # Handle negative RHS for both cases
-        for i in range(self.m):
-            if self.b[i] < 0:
-                self.A[i, :] *= -1
-                self.b[i] *= -1
+        # Store original problem
+        self.original_A = self.A.copy()
+        self.original_b = self.b.copy()
 
         if not self.eq_constraints:
-            # Original implementation for ≤ constraints
+            # Process constraints with negative RHS
             slack_vars = np.eye(self.m)
+            rhs_negative = False
+
+            for i in range(self.m):
+                if self.b[i] < 0:
+                    # Multiply row by -1 and use negative slack
+                    self.A[i, :] *= -1
+                    self.b[i] *= -1
+                    slack_vars[i, i] = -1
+                    rhs_negative = True# Use negative slack for transformed constraints
+                else:
+                    slack_vars[i, i] = 1
+
+
+            # multiply the objective function by -1
+            if rhs_negative:
+                self.c *= -1
+            # Create tableau
             tableau = np.hstack((self.A, slack_vars))
             c_extended = np.hstack((self.c, np.zeros(self.m)))
             b_extended = self.b.reshape(-1, 1)
             tableau = np.vstack((c_extended, tableau))
             tableau = np.hstack((tableau, np.vstack((0, b_extended))))
+
             return tableau
         else:
             # For equality constraints
@@ -155,7 +183,7 @@ class PrimalSimplex:
             self._pivot(pivot_row, pivot_col)
             iteration += 1
 
-            if iteration > 100:  # Prevent infinite loops
+            if iteration > 1000:  # Prevent infinite loops
                 self.in_phase_one = False
                 raise Exception("Phase I exceeded maximum iterations")
 
@@ -190,7 +218,7 @@ class PrimalSimplex:
 
     def _print_tableau(self, iteration):
         """
-        Print the simplex tableau with consistent column headers and dimensions
+        Print the simplex tableau with consistent column headers and reduced costs.
         """
         print(f"\nIteration {iteration}:")
 
@@ -216,10 +244,14 @@ class PrimalSimplex:
         if self.use_fractions:
             tableau_frac = np.vectorize(lambda x: self._limit_fraction(Fraction(x)))(self.tableau)
             rows.append(["z"] + [str(frac) for frac in tableau_frac[0, :]])
+            # Add reduced costs row (same as z-row for non-basic variables)
+            rows.append(["RC"] + [str(frac) for frac in tableau_frac[0, :-1]] + [""])
             for i in range(1, self.m + 1):
                 rows.append([f"R{i}"] + [str(frac) for frac in tableau_frac[i, :]])
         else:
             rows.append(["z"] + list(self.tableau[0, :]))
+            # Add reduced costs row (same as z-row for non-basic variables)
+            # rows.append(["RC"] + list(self.tableau[0, :-1]) + [""])
             for i in range(1, self.m + 1):
                 rows.append([f"R{i}"] + list(self.tableau[i, :]))
 
@@ -241,12 +273,40 @@ class PrimalSimplex:
                         basis.append(f"a{i + 1 - self.n}")
         print("Current Basis:", basis)
 
-        # Print the z-row (objective row)
-        if self.use_fractions:
-            z_row = [str(self._limit_fraction(Fraction(val))) for val in self.tableau[0, :-1]]
-        else:
-            z_row = self.tableau[0, :-1]
-        print("z-row (Objective Row):", z_row)
+    def _get_basic_variables(self):
+        """
+        Correctly identify basic variables from the tableau.
+        """
+        basic_vars = []
+        used_rows = set()
+
+        # For each column (excluding RHS)
+        for j in range(self.tableau.shape[1] - 1):
+            # Get column with z-row! IMPORTANT!
+            col = self.tableau[:, j]
+
+            # Check if this is a unit vector
+            one_position = None
+            is_unit = True
+
+            for i, val in enumerate(col):
+                if abs(val - 1.0) < 1e-10:  # Found a 1
+                    if one_position is None:
+                        one_position = i
+                    else:
+                        is_unit = False  # More than one 1 found
+                        break
+                elif abs(val) > 1e-10:  # Found non-zero that's not 1
+                    is_unit = False
+                    break
+
+            # one_position without + 1 IMPORTANT!
+            if is_unit and one_position is not None and (one_position) not in used_rows:
+                basic_vars.append((j, one_position))
+                used_rows.add(one_position)
+
+        basic_vars = sorted(basic_vars, key=lambda x: x[1])
+        return basic_vars
 
     def solve(self):
         """
@@ -275,7 +335,7 @@ class PrimalSimplex:
 
             pivot_row = self._find_pivot_row(pivot_col)
             if pivot_row is None:
-                raise Exception("Problem is unbounded")
+                break
 
             iteration += 1
             print(f"\nPivot: Entering Column = x{pivot_col + 1}, Leaving Row = R{pivot_row}")
@@ -284,12 +344,17 @@ class PrimalSimplex:
 
         # Extract the solution
         solution = np.zeros(self.n)
-        for i in range(self.n):
-            col = self.tableau[:, i]
-            if np.sum(col == 1) == 1 and np.sum(col == 0) == self.m:
-                solution[i] = self.tableau[np.where(col == 1)[0][0], -1]
+        basic_vars = self._get_basic_variables()
 
-        optimal_value = -self.tableau[0, -1]
+        # Correctly assign the RHS values to the solution array based on the column index
+        for var_idx, row_idx in basic_vars:
+            if var_idx < self.n:  # Only original variables, not slack
+                solution[var_idx] = self.tableau[row_idx, -1]
+
+        if self.rhs_negative:
+            optimal_value = self.tableau[0, -1]
+        else:
+            optimal_value = -self.tableau[0, -1]
         return solution, optimal_value
 
 class DualSimplex:
@@ -428,7 +493,7 @@ def solve_lp_scipy(c, A, b):
     # Solve the LP problem
     A = np.array(A, dtype=float)
     b = np.array(b, dtype=float)
-    result = linprog(c, A_eq=A, b_eq=b, bounds=(0, None), method='highs')
+    result = linprog(c, A_ub=A, b_ub=b, bounds=(0, None), method='highs')
 
     # Check if the solution is successful
     if result.success:
@@ -453,7 +518,7 @@ if __name__ == "__main__":
     # x1, x2, s1, s2 >= 0
 
     problems = [
-        # Problem 1
+
         {
             "c": np.array([2, 3]),
             "A": np.array([[1, 2], [2, 1], [1, 1]]),
@@ -534,13 +599,13 @@ if __name__ == "__main__":
     for i, problem in enumerate(problems):
         print(f"Problem {i + 1}:")
         c, A, b = problem["c"], problem["A"], problem["b"]
-        c = np.array(c, dtype=float)
-        A = np.array(A, dtype=float)
-        b = np.array(b, dtype=float)
+        c_simplex = np.array(c, dtype=float)
+        A_simplex = np.array(A, dtype=float)
+        b_simplex = np.array(b, dtype=float)
 
         try:
             # Solve using Dual Simplex
-            primal_simp = PrimalSimplex(c, A, b, use_fractions=True, fraction_digits=3, eq_constraints=True)
+            primal_simp = PrimalSimplex(c_simplex, A_simplex, b_simplex, use_fractions=False, fraction_digits=3, eq_constraints=False)
             solution_ds, optimal_value_ds = primal_simp.solve()
             print("Primal Simplex Solution:", solution_ds)
             print("Primal Simplex Optimal Value:", optimal_value_ds)
