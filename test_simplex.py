@@ -116,6 +116,46 @@ class TestPrimalSimplex(unittest.TestCase):
         self.assertAlmostEqual(solution[0], 2, places=4)
         self.assertAlmostEqual(optimal_value, -2, places=4)
 
+    def test_numerical_stability(self):
+        """Test numerical stability with ill-conditioned matrices"""
+        # Create an ill-conditioned matrix
+        c = np.array([-1, -1])
+        A = np.array([[1, 1.001], [1.001, 1]])
+        b = np.array([2, 2])
+
+        solver = PrimalSimplex(c, A, b, eq_constraints=True)
+        solution, _ = solver.solve()
+
+        # Check if solution remains feasible despite numerical challenges
+        self.assertTrue(np.all(np.abs(np.dot(A, solution) - b) < 1e-6))
+
+    def test_cycling_prevention(self):
+        """Test prevention of cycling in degenerate cases"""
+        # A known cycling example from literature
+        c = np.array([-2, -3, -1, 0])
+        A = np.array([
+            [2, 1, 1, 0],
+            [1, 2, 0, 1]
+        ])
+        b = np.array([4, 4])
+
+        solver = PrimalSimplex(c, A, b, eq_constraints=True)
+        solution, _ = solver.solve()
+
+        # Check if solution is feasible
+        self.assertTrue(np.all(np.abs(np.dot(A, solution) - b) < 1e-8))
+
+    def test_small_coefficients(self):
+        """Test handling of very small coefficients"""
+        c = np.array([-1e-6, -2e-6])
+        A = np.array([[1e-6, 2e-6], [3e-6, 4e-6]])
+        b = np.array([5e-6, 6e-6])
+
+        # Test the equality constraints case
+        solver_eq = PrimalSimplex(c, A, b, eq_constraints=True)
+        with self.assertRaises(Exception) as context:
+            solver_eq.solve()
+        self.assertTrue("Problem is infeasible" in str(context.exception))
 
 if __name__ == '__main__':
     unittest.main()
