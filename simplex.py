@@ -3,6 +3,7 @@ from scipy.optimize import linprog
 from tabulate import tabulate
 from fractions import Fraction
 
+
 class PrimalSimplex:
     def __init__(self, c, A, b, use_fractions=False, fraction_digits=3, eq_constraints=False):
         """
@@ -26,6 +27,8 @@ class PrimalSimplex:
         self.tableau = self._initialize_tableau()
         self.fraction_digits = fraction_digits
 
+        self.phase = 1 if eq_constraints else 2  # Track which phase we're in
+
 
     def _check_negative_rhs(self):
         """
@@ -35,7 +38,6 @@ class PrimalSimplex:
             if self.b[i] < 0:
                 return True
         return False
-
 
     def _limit_fraction(self, value):
         """
@@ -89,10 +91,9 @@ class PrimalSimplex:
                     self.A[i, :] *= -1
                     self.b[i] *= -1
                     slack_vars[i, i] = -1
-                    rhs_negative = True# Use negative slack for transformed constraints
+                    rhs_negative = True  # Use negative slack for transformed constraints
                 else:
                     slack_vars[i, i] = 1
-
 
             # multiply the objective function by -1
             if rhs_negative:
@@ -106,40 +107,36 @@ class PrimalSimplex:
 
             return tableau
         else:
-            # For equality constraints
-            # We only need artificial variables (no slack variables)
-            artificial_vars = np.eye(self.m)
-            tableau = np.hstack((self.A, artificial_vars))
+            # Store original objective coefficients
+            self.original_c = self.c.copy()
 
-            # Store indices of artificial variables for Phase I
+            # Add artificial variables for equality constraints
+            artificial_vars = np.eye(self.m)
             self.artificial_indices = list(range(self.n, self.n + self.m))
 
-            # Create auxiliary objective row for Phase I (sum of artificial variables)
-            auxiliary_obj = np.zeros(self.n + self.m)
-            auxiliary_obj[self.artificial_indices] = 1
+            # Construct initial tableau
+            tableau = np.zeros((self.m + 1, self.n + self.m + 1))
 
-            # For each row with artificial variable, subtract it from auxiliary objective
-            for i in range(self.m):
-                auxiliary_obj -= tableau[i, :]
+            # Set constraint coefficients
+            tableau[1:, :self.n] = self.A
+            tableau[1:, self.n:self.n + self.m] = artificial_vars
+            tableau[1:, -1] = self.b
 
-            # Create Phase I tableau
-            b_extended = self.b.reshape(-1, 1)
-            tableau = np.vstack((auxiliary_obj, tableau))
-            tableau = np.hstack((tableau, np.vstack((-np.sum(self.b), b_extended))))
+            # Set up Phase I objective: minimize sum of artificial variables
+            tableau[0, self.artificial_indices] = 1
 
-            # Store original objective coefficients for Phase II
-            self.original_obj = np.zeros(self.n + self.m)
-            self.original_obj[:self.n] = self.c
+            # Make the objective row consistent with the artificial variable basis
+            for i in range(1, self.m + 1):
+                tableau[0, :] -= tableau[i, :]
 
             return tableau
 
     def _find_pivot_column(self):
         """
-        Find the entering variable (pivot column) by choosing the most negative coefficient in the objective row.
+        Find the entering variable (pivot column) by choosing the most negative coefficient.
         """
-        obj_row = self.tableau[0, :-1]
-        pivot_col = np.argmin(obj_row)
-        return pivot_col if obj_row[pivot_col] < 0 else None
+        min_idx = np.argmin(self.tableau[0, :self.n])
+        return min_idx if self.tableau[0, min_idx] < -1e-10 else None
 
     def _find_pivot_row(self, pivot_col):
         """
@@ -147,12 +144,14 @@ class PrimalSimplex:
         """
         ratios = []
         for i in range(1, self.m + 1):
-            if self.tableau[i, pivot_col] > 0:
-                ratios.append(self.tableau[i, -1] / self.tableau[i, pivot_col])
-            else:
-                ratios.append(np.inf)
-        pivot_row = np.argmin(ratios) + 1
-        return pivot_row if ratios[pivot_row - 1] != np.inf else None
+            if self.tableau[i, pivot_col] > 1e-10:
+                ratio = self.tableau[i, -1] / self.tableau[i, pivot_col]
+                ratios.append((ratio, i))
+
+        if not ratios:
+            return None
+
+        return min(ratios, key=lambda x: x[0])[1]
 
     def _pivot(self, pivot_row, pivot_col):
         """
@@ -166,99 +165,143 @@ class PrimalSimplex:
 
     def _phase_one(self):
         """
-        Execute Phase I of the two-phase simplex method for equality constraints.
+        Execute Phase I of the two-phase simplex method.
+        Returns True if a feasible solution is found, False otherwise.
         """
-        self.in_phase_one = True  # Flag to indicate we're in Phase I
         iteration = 0
-        while True:
-            pivot_col = self._find_pivot_column()
-            if pivot_col is None:
-                break
+        self.in_phase_one = True
 
-            pivot_row = self._find_pivot_row(pivot_col)
-            if pivot_row is None:
-                self.in_phase_one = False
+        while True:
+            self._print_tableau(iteration)
+
+            # Find entering variable (most negative coefficient in objective row)
+            pivot_col = np.argmin(self.tableau[0, :-1])
+            if self.tableau[0, pivot_col] >= -1e-10:
+                break  # Phase I complete
+
+            # Find leaving variable
+            ratios = []
+            for i in range(1, self.m + 1):
+                if self.tableau[i, pivot_col] > 1e-10:
+                    ratio = self.tableau[i, -1] / self.tableau[i, pivot_col]
+                    ratios.append(ratio)
+                else:
+                    ratios.append(np.inf)
+
+            if all(r == np.inf for r in ratios):
                 return False  # Problem is infeasible
 
+            pivot_row = 1 + np.argmin(ratios)
+
+            # Perform pivot
+            print(f"\nPivot: Entering Column = {pivot_col + 1}, Leaving Row = {pivot_row}")
             self._pivot(pivot_row, pivot_col)
             iteration += 1
 
-            if iteration > 1000:  # Prevent infinite loops
-                self.in_phase_one = False
-                raise Exception("Phase I exceeded maximum iterations")
-
-        # Check if the auxiliary objective value is approximately zero
+        # Check if all artificial variables are zero
         if abs(self.tableau[0, -1]) > 1e-10:
-            self.in_phase_one = False
             return False  # Problem is infeasible
 
-        # Remove artificial variables from basis if they remain
-        # First, store the original tableau dimensions
-        rows, cols = self.tableau.shape
+        return True
 
-        # Create new tableau without artificial columns
-        new_tableau = np.zeros((rows, self.n + 1))
-        new_tableau[:, :self.n] = self.tableau[:, :self.n]
-        new_tableau[:, -1] = self.tableau[:, -1]
+    def _transition_to_phase_two(self):
+        """
+        Transition from Phase I to Phase II.
+        Sets up the tableau for Phase II with the original objective function.
+        """
+        # Set up the original objective row
+        self.tableau[0, :] = 0
+        self.tableau[0, :self.n] = self.original_c
 
-        # Replace objective row with original objective
-        new_tableau[0, :self.n] = self.original_obj[:self.n]
+        # Make the objective row consistent with the current basis
+        basic_vars = self._get_basic_variables()
+        for col_idx, row_idx in basic_vars:
+            if col_idx < self.n:  # Only adjust for original variables
+                self.tableau[0, :] -= self.tableau[0, col_idx] * self.tableau[row_idx, :]
 
-        # Update objective row based on current basic variables
-        for j in range(self.n):
+        # Remove artificial columns (but keep basic artificials if needed)
+        cols_to_keep = list(range(self.n))  # Keep original variables
+
+        # Check which artificial variables are in the basis and still needed
+        for j in self.artificial_indices:
             col = self.tableau[:, j]
-            if np.sum(col == 1) == 1 and np.sum(col == 0) == self.m:
-                basic_row = np.where(col == 1)[0][0]
-                if basic_row > 0:  # Skip the objective row
-                    new_tableau[0, :] -= self.original_obj[j] * new_tableau[basic_row, :]
+            is_basic = False
+            for i in range(1, self.m + 1):
+                if abs(col[i] - 1.0) < 1e-10 and all(abs(col[k]) < 1e-10 for k in range(1, self.m + 1) if k != i):
+                    is_basic = True
+                    break
+            if is_basic:
+                cols_to_keep.append(j)
 
-        self.tableau = new_tableau
-        self.in_phase_one = False  # Phase I is complete
+        # Keep RHS column
+        cols_to_keep.append(self.tableau.shape[1] - 1)
+
+        # Update tableau
+        self.tableau = self.tableau[:, cols_to_keep]
+        self.phase = 2
         return True
 
     def _print_tableau(self, iteration):
         """
         Print the simplex tableau with consistent column headers and reduced costs.
+        Dynamically adjusts display based on phase and number of variables.
         """
         print(f"\nIteration {iteration}:")
 
-        # Prepare headers based on the phase and constraint type
-        var_headers = [f"x{i + 1}" for i in range(self.n)]
+        if self.phase == 1:
+            # Phase I display
+            headers = (
+                    [f"x{i + 1}" for i in range(self.n)] +  # Original variables
+                    [f"a{i + 1}" for i in range(self.m)] +  # Artificial variables
+                    ["RHS"]
+            )
 
-        if not self.eq_constraints:
-            # For inequality constraints, include slack variables
-            slack_headers = [f"s{i + 1}" for i in range(self.m)]
-            headers = var_headers + slack_headers + ["RHS"]
+            # Create rows with proper spacing
+            rows = []
+            row_label_width = 2  # Width for "--" or "Rx"
+            for i in range(self.m + 1):
+                label = "z" if i == 0 else f"R{i}"
+                row_data = self.tableau[i, :]
+                # Convert row data to list and ensure proper formatting
+                row_values = [f"{val:8.4f}" for val in row_data]
+                rows.append([label] + row_values)
+
         else:
-            if hasattr(self, 'in_phase_one') and self.in_phase_one:
-                # For Phase I of equality constraints, include artificial variables
-                art_headers = [f"a{i + 1}" for i in range(self.m)]
-                headers = var_headers + art_headers + ["RHS"]
+            # Phase II display
+            # For equality constraints after Phase I, only show original variables
+            if self.eq_constraints:
+                headers = [f"x{i + 1}" for i in range(self.n)] + ["RHS"]
+                num_cols = self.n + 1  # Original variables + RHS
             else:
-                # For Phase II of equality constraints, only original variables
-                headers = var_headers + ["RHS"]
+                # For inequality constraints, include slack variables
+                headers = ([f"x{i + 1}" for i in range(self.n)] +
+                           [f"s{i + 1}" for i in range(self.m)] +
+                           ["RHS"])
+                num_cols = self.n + self.m + 1  # Original + slack + RHS
 
-        rows = []
+            # Create rows with proper spacing
+            rows = []
+            row_label_width = 2  # Width for "--" or "Rx"
+            for i in range(self.m + 1):
+                label = "z" if i == 0 else f"R{i}"
+                # Only take the columns we need based on the phase
+                row_data = self.tableau[i, :num_cols]
+                # Convert row data to list and ensure proper formatting
+                row_values = [f"{val:8.4f}" for val in row_data]
+                rows.append([label] + row_values)
 
-        # Convert tableau entries to fractions if use_fractions is True
-        if self.use_fractions:
-            tableau_frac = np.vectorize(lambda x: self._limit_fraction(Fraction(x)))(self.tableau)
-            rows.append(["z"] + [str(frac) for frac in tableau_frac[0, :]])
-            # Add reduced costs row (same as z-row for non-basic variables)
-            rows.append(["RC"] + [str(frac) for frac in tableau_frac[0, :-1]] + [""])
-            for i in range(1, self.m + 1):
-                rows.append([f"R{i}"] + [str(frac) for frac in tableau_frac[i, :]])
-        else:
-            rows.append(["z"] + list(self.tableau[0, :]))
-            # Add reduced costs row (same as z-row for non-basic variables)
-            # rows.append(["RC"] + list(self.tableau[0, :-1]) + [""])
-            for i in range(1, self.m + 1):
-                rows.append([f"R{i}"] + list(self.tableau[i, :]))
-
-        print("Tableau:")
-        print(tabulate(rows, headers=headers, floatfmt=".4f"))
+        # Use tabulate with proper formatting
+        print(tabulate(rows,
+                       headers=headers,
+                       colalign=["right"] * (len(headers) + 1),  # +1 for row labels
+                       floatfmt=".4f"))
 
         # Print the current basis
+        basis = self._get_current_basis()
+        print("Current Basis:", basis)
+
+    def _get_current_basis(self):
+        """Helper method to get current basis variables"""
         basis = []
         num_cols = self.tableau.shape[1] - 1  # Exclude RHS column
         for i in range(num_cols):
@@ -266,96 +309,81 @@ class PrimalSimplex:
             if np.sum(col == 1) == 1 and np.sum(col == 0) == self.m:
                 if i < self.n:
                     basis.append(f"x{i + 1}")
-                elif not self.eq_constraints or (hasattr(self, 'in_phase_one') and self.in_phase_one):
-                    if not self.eq_constraints:
-                        basis.append(f"s{i + 1 - self.n}")
-                    else:
-                        basis.append(f"a{i + 1 - self.n}")
-        print("Current Basis:", basis)
+                elif not self.eq_constraints:
+                    basis.append(f"s{i + 1 - self.n}")
+                elif self.in_phase_one:
+                    basis.append(f"a{i + 1 - self.n}")
+        return basis
 
     def _get_basic_variables(self):
         """
-        Correctly identify basic variables from the tableau.
+        Identify basic variables from the tableau by finding unit vectors.
+        Returns list of (column_index, row_index) pairs sorted by row_index.
         """
         basic_vars = []
         used_rows = set()
 
-        # For each column (excluding RHS)
-        for j in range(self.tableau.shape[1] - 1):
-            # Get column with z-row! IMPORTANT!
+        for j in range(self.tableau.shape[1] - 1):  # Exclude RHS column
             col = self.tableau[:, j]
+            nonzero_indices = np.where(abs(col) > 1e-10)[0]
 
-            # Check if this is a unit vector
-            one_position = None
-            is_unit = True
+            # Check if column has exactly one 1 and rest zeros
+            if (len(nonzero_indices) == 1 and
+                    abs(col[nonzero_indices[0]] - 1.0) < 1e-10 and
+                    nonzero_indices[0] not in used_rows):
+                row_idx = nonzero_indices[0]
+                basic_vars.append((j, row_idx))
+                used_rows.add(row_idx)
 
-            for i, val in enumerate(col):
-                if abs(val - 1.0) < 1e-10:  # Found a 1
-                    if one_position is None:
-                        one_position = i
-                    else:
-                        is_unit = False  # More than one 1 found
-                        break
-                elif abs(val) > 1e-10:  # Found non-zero that's not 1
-                    is_unit = False
-                    break
-
-            # one_position without + 1 IMPORTANT!
-            if is_unit and one_position is not None and (one_position) not in used_rows:
-                basic_vars.append((j, one_position))
-                used_rows.add(one_position)
-
-        basic_vars = sorted(basic_vars, key=lambda x: x[1])
-        return basic_vars
+        return sorted(basic_vars, key=lambda x: x[1])
 
     def solve(self):
         """
-        Solve the linear programming problem using either standard simplex (≤ constraints)
-        or two-phase simplex method (= constraints)
+        Solve the linear programming problem using the two-phase simplex method.
         """
-        iteration = 0
-
         if self.eq_constraints:
-            # Execute Phase I for equality constraints
+            # Execute Phase I
             print("\nStarting Phase I")
-            self._print_tableau(0)  # Print initial tableau
-            feasible = self._phase_one()
-            if not feasible:
+            if not self._phase_one():
                 raise Exception("Problem is infeasible")
-            print("\nPhase I completed - Starting Phase II")
-            iteration = 0  # Reset iteration counter for Phase II
 
-        # Phase II (same for both types of constraints)
-        self._print_tableau(iteration)
+            print("\nStarting Phase II")
+            self._transition_to_phase_two()
 
+        # Phase II
+        iteration = 0
         while True:
+            self._print_tableau(iteration)
+
+            # Find entering variable
             pivot_col = self._find_pivot_column()
             if pivot_col is None:
                 break  # Optimal solution found
 
+            # Find leaving variable
             pivot_row = self._find_pivot_row(pivot_col)
             if pivot_row is None:
-                break
+                raise Exception("Problem is unbounded")
 
-            iteration += 1
-            print(f"\nPivot: Entering Column = x{pivot_col + 1}, Leaving Row = R{pivot_row}")
+            # Perform pivot
+            print(f"\nPivot: Entering Column = {pivot_col + 1}, Leaving Row = {pivot_row}")
             self._pivot(pivot_row, pivot_col)
-            self._print_tableau(iteration)
+            iteration += 1
 
-        # Extract the solution
+        # Extract solution
         solution = np.zeros(self.n)
         basic_vars = self._get_basic_variables()
 
-        # Correctly assign the RHS values to the solution array based on the column index
-        for var_idx, row_idx in basic_vars:
-            if var_idx < self.n:  # Only original variables, not slack
-                solution[var_idx] = self.tableau[row_idx, -1]
+        for col_idx, row_idx in basic_vars:
+            if col_idx < self.n:  # Only original variables
+                solution[col_idx] = self.tableau[row_idx, -1]
 
         if self.rhs_negative:
             optimal_value = self.tableau[0, -1]
         else:
             optimal_value = -self.tableau[0, -1]
         return solution, optimal_value
+
 
 class DualSimplex:
     def __init__(self, c, A, b):
@@ -479,6 +507,7 @@ class DualSimplex:
         optimal_value = -self.tableau[0, -1]
         return solution, optimal_value
 
+
 def solve_lp_scipy(c, A, b):
     """
     Solve a linear programming problem using SciPy's linprog function:
@@ -493,13 +522,14 @@ def solve_lp_scipy(c, A, b):
     # Solve the LP problem
     A = np.array(A, dtype=float)
     b = np.array(b, dtype=float)
-    result = linprog(c, A_ub=A, b_ub=b, bounds=(0, None), method='highs')
+    result = linprog(c, A_eq=A, b_eq=b, bounds=(0, None), method='highs')
 
     # Check if the solution is successful
     if result.success:
         return result.x, result.fun
     else:
         raise ValueError("Problem could not be solved:", result.message)
+
 
 # Example Usage
 if __name__ == "__main__":
@@ -605,7 +635,8 @@ if __name__ == "__main__":
 
         try:
             # Solve using Dual Simplex
-            primal_simp = PrimalSimplex(c_simplex, A_simplex, b_simplex, use_fractions=False, fraction_digits=3, eq_constraints=False)
+            primal_simp = PrimalSimplex(c_simplex, A_simplex, b_simplex, use_fractions=False, fraction_digits=3,
+                                        eq_constraints=True)
             solution_ds, optimal_value_ds = primal_simp.solve()
             print("Primal Simplex Solution:", solution_ds)
             print("Primal Simplex Optimal Value:", optimal_value_ds)
