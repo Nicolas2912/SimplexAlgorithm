@@ -2,8 +2,6 @@
 
 ![Linear Programming Solver Demo](Simplex_Frontend.gif)
 
-$E = mc^2$
-
 A robust implementation of the Primal Simplex method for solving Linear Programming problems. This project includes both a backend solver implementation and a user-friendly web interface built with Streamlit.
 
 ## Features
@@ -98,45 +96,55 @@ print("Optimal value:", optimal_value)
 
 The solver handles two types of constraint systems based on the `eq_constraints` parameter:
 
-### When eq_constraints=False (Default)
-All constraints are treated as less than or equal (≤) constraints. The problem should be in the following format:
+### Standard Form (eq_constraints=False)
+All constraints are treated as less than or equal (≤) constraints. The problem follows the standard form:
 
-Minimize:
-```
-c₁x₁ + c₂x₂ + ... + cₙxₙ
-```
+$$
+\begin{align*}
+\text{minimize} \quad & z = \mathbf{c}^\top \mathbf{x} \\
+\text{subject to} \quad & \mathbf{A}\mathbf{x} \leq \mathbf{b} \\
+& \mathbf{x} \geq \mathbf{0}
+\end{align*}
+$$
 
-Subject to:
-```
-a₁₁x₁ + a₁₂x₂ + ... + a₁ₙxₙ ≤ b₁
-a₂₁x₁ + a₂₂x₂ + ... + a₂ₙxₙ ≤ b₂
-...
-aₘ₁x₁ + aₘ₂x₂ + ... + aₘₙxₙ ≤ bₘ
-```
+Or more explicitly:
 
-### When eq_constraints=True
-All constraints are treated as equality (=) constraints, and the solver uses a two-phase simplex method. The problem should be in the following format:
+$$
+\begin{align*}
+\text{minimize} \quad & z = \sum_{j=1}^n c_j x_j \\
+\text{subject to} \quad & \sum_{j=1}^n a_{ij}x_j \leq b_i, \quad i = 1,\ldots,m \\
+& x_j \geq 0, \quad j = 1,\ldots,n
+\end{align*}
+$$
 
-Minimize:
-```
-c₁x₁ + c₂x₂ + ... + cₙxₙ
-```
+### Equality Form (eq_constraints=True)
+All constraints are treated as equality (=) constraints, using the two-phase simplex method:
 
-Subject to:
-```
-a₁₁x₁ + a₁₂x₂ + ... + a₁ₙxₙ = b₁
-a₂₁x₁ + a₂₂x₂ + ... + a₂ₙxₙ = b₂
-...
-aₘ₁x₁ + aₘ₂x₂ + ... + aₘₙxₙ = bₘ
-```
+$$
+\begin{align*}
+\text{minimize} \quad & z = \mathbf{c}^\top \mathbf{x} \\
+\text{subject to} \quad & \mathbf{A}\mathbf{x} = \mathbf{b} \\
+& \mathbf{x} \geq \mathbf{0}
+\end{align*}
+$$
 
-Note: When using `eq_constraints=True`, the solver automatically implements the two-phase simplex method to handle the equality constraints, introducing artificial variables as needed.
+Or more explicitly:
+
+$$
+\begin{align*}
+\text{minimize} \quad & z = \sum_{j=1}^n c_j x_j \\
+\text{subject to} \quad & \sum_{j=1}^n a_{ij}x_j = b_i, \quad i = 1,\ldots,m \\
+& x_j \geq 0, \quad j = 1,\ldots,n
+\end{align*}
+$$
 
 Where:
-- x₁, x₂, ..., xₙ ≥ 0 (non-negativity constraints)
-- c is the cost vector
-- A is the constraint coefficient matrix
-- b is the right-hand side vector
+- $$\mathbf{x} \in \mathbb{R}^n$$ is the vector of decision variables
+- $$\mathbf{c} \in \mathbb{R}^n$$ is the cost vector
+- $$\mathbf{A} \in \mathbb{R}^{m \times n}$$ is the constraint coefficient matrix
+- $$\mathbf{b} \in \mathbb{R}^m$$ is the right-hand side vector
+
+Note: When using `eq_constraints=True`, the solver automatically implements the two-phase simplex method to handle the equality constraints, introducing artificial variables as needed.
 
 ## License
 
