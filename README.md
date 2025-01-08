@@ -2,6 +2,8 @@
 
 ![Linear Programming Solver Demo](Simplex_Frontend.gif)
 
+$E = mc^2$
+
 A robust implementation of the Primal Simplex method for solving Linear Programming problems. This project includes both a backend solver implementation and a user-friendly web interface built with Streamlit.
 
 ## Features
