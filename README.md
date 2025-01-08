@@ -1,95 +1,160 @@
 # Linear Programming Solver
 
-A robust implementation of the Simplex algorithm for solving linear programming problems, featuring both primal and dual simplex methods with an interactive web interface.
+![Linear Programming Solver Demo](Simplex_Frontend.gif)
 
-## Overview
-
-This project provides a comprehensive solution for solving linear programming problems using different variants of the Simplex algorithm. It consists of three main components:
-
-- `simplex.py`: Core implementation of the Primal and Dual Simplex algorithms
-- `test_simplex.py`: Extensive test suite ensuring algorithmic correctness
-- `frontend_simplex.py`: Streamlit-based web interface for interactive problem-solving
+A robust implementation of the Primal Simplex method for solving Linear Programming problems. This project includes both a backend solver implementation and a user-friendly web interface built with Streamlit.
 
 ## Features
 
-- **Multiple Solver Methods**
-  - Primal Simplex algorithm with two-phase method support
-  - Dual Simplex algorithm
-  - Integration with SciPy's linear programming solver
-
-- **Robust Problem Handling**
-  - Support for equality and inequality constraints
-  - Automatic handling of negative right-hand side values
-  - Detection of unbounded and infeasible problems
-  - Handling of degenerate cases
-
-- **Interactive Web Interface**
-  - Real-time problem visualization
-  - Step-by-step solution process
-  - Support for both decimal and fraction output
-  - Dynamic tableau visualization
-  - LaTeX rendering of mathematical formulations
+- Implementation of the Two-Phase Primal Simplex algorithm
+- Support for both equality and inequality constraints
+- Interactive web interface for problem input and visualization
+- Step-by-step solution visualization with pivoting information
+- Support for both decimal and fraction output formats
+- Example problems included for learning and testing
+- Comparison with SciPy's linear programming solver
+- Detailed tableau visualization at each iteration
+- LaTeX formatting for mathematical expressions
 
 ## Requirements
 
-- Python 3.7+
-- NumPy
-- SciPy
-- Streamlit
-- Pandas
-- Tabulate
+Create a conda environment and install the required packages:
+
+```bash
+conda create -n lp-solver python=3.9
+conda activate lp-solver
+pip install -r requirements.txt
+```
+
+Required packages (requirements.txt):
+```
+numpy>=1.21.0
+scipy>=1.7.0
+streamlit>=1.10.0
+tabulate>=0.8.9
+pandas>=1.3.0
+```
+
+## Project Structure
+
+```
+linear-programming-solver/
+├── simplex.py           # Core implementation of the Primal Simplex algorithm
+├── frontend_simplex.py  # Streamlit web interface
+└── requirements.txt     # Project dependencies
+```
 
 ## Installation
 
+1. Clone the repository:
 ```bash
-pip install numpy scipy streamlit pandas tabulate
+git clone https://github.com/yourusername/linear-programming-solver.git
+cd linear-programming-solver
+```
+
+2. Create and activate a conda environment:
+```bash
+conda create -n lp-solver python=3.9
+conda activate lp-solver
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
 ```
 
 ## Usage
 
-### Command Line Interface
-```python
-from simplex import PrimalSimplex
-import numpy as np
+### Running the Web Interface
 
-# Define your linear programming problem
-c = np.array([2, 3])               # Objective function coefficients
-A = np.array([[1, 2], [2, 1]])     # Constraint coefficients
-b = np.array([10, 8])              # Right-hand side values
-
-# Create and solve
-solver = PrimalSimplex(c, A, b)
-solution, optimal_value = solver.solve()
-```
-
-### Web Interface
+1. Start the Streamlit application:
 ```bash
 streamlit run frontend_simplex.py
 ```
 
-## Testing
+2. Open your web browser and navigate to the provided URL (typically http://localhost:8501)
 
-The project includes comprehensive unit tests covering various scenarios:
-```bash
-python -m unittest test_simplex.py
+### Using the Command Line Interface
+
+You can also use the solver directly through Python:
+
+```python
+import numpy as np
+from simplex import PrimalSimplex
+
+# Define your problem
+c = np.array([2, 3])  # Objective function coefficients
+A = np.array([[1, 2], [2, 1], [1, 1]])  # Constraint coefficients
+b = np.array([10, 8, 5])  # Right-hand side values
+
+# Create solver instance
+# For inequality constraints (≤)
+solver = PrimalSimplex(c, A, b, use_fractions=True, eq_constraints=False)
+
+# Or for equality constraints (=)
+solver = PrimalSimplex(c, A, b, use_fractions=True, eq_constraints=True)
+
+# Solve the problem
+solution, optimal_value = solver.solve()
+
+print("Optimal solution:", solution)
+print("Optimal value:", optimal_value)
 ```
 
-## Mathematical Background
+## Problem Format
 
-The implementation solves linear programming problems in the standard form:
+The solver handles two types of constraint systems based on the `eq_constraints` parameter:
 
+### When eq_constraints=False (Default)
+All constraints are treated as less than or equal (≤) constraints. The problem should be in the following format:
+
+Minimize:
 ```
-Minimize    c^T x
-Subject to  Ax ≤ b
-           x ≥ 0
+c₁x₁ + c₂x₂ + ... + cₙxₙ
 ```
 
-For equality constraints, the solver automatically handles the problem using the two-phase simplex method.
+Subject to:
+```
+a₁₁x₁ + a₁₂x₂ + ... + a₁ₙxₙ ≤ b₁
+a₂₁x₁ + a₂₂x₂ + ... + a₂ₙxₙ ≤ b₂
+...
+aₘ₁x₁ + aₘ₂x₂ + ... + aₘₙxₙ ≤ bₘ
+```
+
+### When eq_constraints=True
+All constraints are treated as equality (=) constraints, and the solver uses a two-phase simplex method. The problem should be in the following format:
+
+Minimize:
+```
+c₁x₁ + c₂x₂ + ... + cₙxₙ
+```
+
+Subject to:
+```
+a₁₁x₁ + a₁₂x₂ + ... + a₁ₙxₙ = b₁
+a₂₁x₁ + a₂₂x₂ + ... + a₂ₙxₙ = b₂
+...
+aₘ₁x₁ + aₘ₂x₂ + ... + aₘₙxₙ = bₘ
+```
+
+Note: When using `eq_constraints=True`, the solver automatically implements the two-phase simplex method to handle the equality constraints, introducing artificial variables as needed.
+
+Where:
+- x₁, x₂, ..., xₙ ≥ 0 (non-negativity constraints)
+- c is the cost vector
+- A is the constraint coefficient matrix
+- b is the right-hand side vector
 
 ## License
 
-MIT License
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Contributing
+## Authors
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Nicolas Schneider
+
+## Acknowledgments
+
+- Implementation based on the Two-Phase Simplex Method
+- Web interface built using Streamlit
+- Mathematical formulations from Linear Programming literature
