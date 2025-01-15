@@ -209,36 +209,32 @@ class PrimalSimplex:
         Transition from Phase I to Phase II.
         Sets up the tableau for Phase II with the original objective function.
         """
-        # Set up the original objective row
-        self.tableau[0, :] = 0
-        self.tableau[0, :self.n] = self.original_c
-
-        # Make the objective row consistent with the current basis
+        # Store the current basic solution (RHS values)
+        basic_solution = self.tableau[1:, -1].copy()
+        
+        # Get the current basic variables
         basic_vars = self._get_basic_variables()
+        
+        # Create new tableau with proper dimensions
+        new_tableau = np.zeros((self.m + 1, self.n + 1))
+        
+        # Set the original objective coefficients
+        new_tableau[0, :self.n] = self.original_c
+        
+        # Copy the coefficients for original variables
+        new_tableau[1:, :self.n] = self.tableau[1:, :self.n]
+        
+        # Preserve the RHS values
+        new_tableau[1:, -1] = basic_solution
+        
+        # Update the objective row to reflect the current basis
         for col_idx, row_idx in basic_vars:
-            if col_idx < self.n:  # Only adjust for original variables
-                self.tableau[0, :] -= self.tableau[0, col_idx] * self.tableau[row_idx, :]
-
-        # Remove artificial columns (but keep basic artificials if needed)
-        cols_to_keep = list(range(self.n))  # Keep original variables
-
-        # Check which artificial variables are in the basis and still needed
-        for j in self.artificial_indices:
-            col = self.tableau[:, j]
-            is_basic = False
-            for i in range(1, self.m + 1):
-                if abs(col[i] - 1.0) < 1e-10 and all(abs(col[k]) < 1e-10 for k in range(1, self.m + 1) if k != i):
-                    is_basic = True
-                    break
-            if is_basic:
-                cols_to_keep.append(j)
-
-        # Keep RHS column
-        cols_to_keep.append(self.tableau.shape[1] - 1)
-
-        # Update tableau
-        self.tableau = self.tableau[:, cols_to_keep]
+            if col_idx < self.n:  # Only for original variables
+                new_tableau[0, :] -= new_tableau[0, col_idx] * new_tableau[row_idx, :]
+        
+        self.tableau = new_tableau
         self.phase = 2
+    
         return True
 
     def _print_tableau(self, iteration):
@@ -384,7 +380,7 @@ class PrimalSimplex:
             optimal_value = -self.tableau[0, -1]
         return solution, optimal_value
 
-def solve_lp_scipy(c, A, b):
+def solve_lp_scipy(c, A, b, eq_constraints):
     """
     Solve a linear programming problem using SciPy's linprog function:
     Minimize c^T x
@@ -398,7 +394,10 @@ def solve_lp_scipy(c, A, b):
     # Solve the LP problem
     A = np.array(A, dtype=float)
     b = np.array(b, dtype=float)
-    result = linprog(c, A_eq=A, b_eq=b, bounds=(0, None), method='highs')
+    if not eq_constraints:
+        result = linprog(c, A_ub=A, b_ub=b, bounds=(0, None), method='highs')
+    if eq_constraints:
+        result = linprog(c, A_eq=A, b_eq=b, bounds=(0, None), method='highs')
 
     # Check if the solution is successful
     if result.success:
@@ -424,7 +423,6 @@ if __name__ == "__main__":
     # x1, x2, s1, s2 >= 0
 
     problems = [
-
         {
             "c": np.array([2, 3]),
             "A": np.array([[1, 2], [2, 1], [1, 1]]),
@@ -500,6 +498,7 @@ if __name__ == "__main__":
             "b": np.array([10, 8, 5])
         }
 
+
     ]
 
     for i, problem in enumerate(problems):
@@ -512,7 +511,7 @@ if __name__ == "__main__":
         try:
             # Solve using Dual Simplex
             primal_simp = PrimalSimplex(c_simplex, A_simplex, b_simplex, use_fractions=False, fraction_digits=3,
-                                        eq_constraints=True)
+                                        eq_constraints=False)
             solution_ds, optimal_value_ds = primal_simp.solve()
             print("Primal Simplex Solution:", solution_ds)
             print("Primal Simplex Optimal Value:", optimal_value_ds)
@@ -521,7 +520,7 @@ if __name__ == "__main__":
 
         try:
             # Solve using SciPy
-            solution_sp, optimal_value_sp = solve_lp_scipy(c, A, b)
+            solution_sp, optimal_value_sp = solve_lp_scipy(c, A, b, eq_constraints=False)
             print("SciPy Solution:", solution_sp)
             print("SciPy Optimal Value:", optimal_value_sp)
         except Exception as e:
