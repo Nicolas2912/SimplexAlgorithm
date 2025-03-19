@@ -5,6 +5,9 @@ from fractions import Fraction
 from tabulate import tabulate
 from simplex import PrimalSimplex  # Assuming the class is in primal_simplex.py
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from simplex import SensitivityAnalysis
 
 
 class SolutionStorage:
@@ -677,17 +680,1105 @@ def plot_solution_focus(c, A, b, solution):
     return fig
 
 
-def main():
-    # Initialize session state variables if they don't exist
+def what_if_analysis_tab(sensitivity, original_c, original_A, original_b, solver):
+    """
+    Display the what-if analysis tab with improved re-solve functionality.
+    """
+    st.subheader("What-If Analysis")
+
+    st.write("""
+    Use this tool to explore how changes to multiple parameters simultaneously affect your optimal solution.
+    """)
+
+    # Create two columns
+    col1, col2 = st.columns(2)
+
+    # Column 1: Objective coefficients
+    with col1:
+        st.write("**Objective Coefficients**")
+
+        # Create sliders for each objective coefficient
+        new_c = original_c.copy()
+        obj_sensitivity = sensitivity.objective_sensitivity_analysis()
+
+        for j in range(solver.n):
+            if j in obj_sensitivity:
+                current_value = original_c[j]
+                lower, upper = obj_sensitivity[j]
+
+                # Set reasonable bounds for the slider
+                min_val = max(lower, current_value - 5) if lower != -np.inf else current_value - 5
+                max_val = min(upper, current_value + 5) if upper != np.inf else current_value + 5
+
+                new_c[j] = st.slider(
+                    f"c{j + 1} ({current_value})",
+                    float(min_val),
+                    float(max_val),
+                    float(current_value),
+                    step=0.1,
+                    key=f"slider_c_{j}"
+                )
+
+    # Column 2: RHS values
+    with col2:
+        st.write("**Right-Hand Side Values**")
+
+        # Create sliders for each RHS value
+        new_b = original_b.copy()
+        rhs_sensitivity = sensitivity.rhs_sensitivity_analysis()
+
+        for i in range(solver.m):
+            if i in rhs_sensitivity:
+                current_value = original_b[i]
+                lower, upper = rhs_sensitivity[i]
+
+                # Set reasonable bounds for the slider
+                min_val = max(lower, current_value - 5) if lower != -np.inf else current_value - 5
+                max_val = min(upper, current_value + 5) if upper != np.inf else current_value + 5
+
+                new_b[i] = st.slider(
+                    f"b{i + 1} ({current_value})",
+                    float(min_val),
+                    float(max_val),
+                    float(current_value),
+                    step=0.1,
+                    key=f"slider_b_{i}"
+                )
+
+    # Check if any parameter is outside its sensitivity range
+    obj_outside_range = False
+    for j in range(solver.n):
+        if j in obj_sensitivity:
+            lower, upper = obj_sensitivity[j]
+            if (lower != -np.inf and new_c[j] < lower) or (upper != np.inf and new_c[j] > upper):
+                obj_outside_range = True
+                break
+
+    rhs_outside_range = False
+    for i in range(solver.m):
+        if i in rhs_sensitivity:
+            lower, upper = rhs_sensitivity[i]
+            if (lower != -np.inf and new_b[i] < lower) or (upper != np.inf and new_b[i] > upper):
+                rhs_outside_range = True
+                break
+
+    if obj_outside_range or rhs_outside_range:
+        st.warning(
+            "One or more parameters are outside their sensitivity ranges. The optimal basis would change, requiring a re-solve of the problem.")
+
+        # Offer option to re-solve with improved functionality
+        if st.button("Re-solve with new parameters", key="resolve_button"):
+            # Store the new parameters in session state
+            st.session_state.sensitivity_resample = {
+                'c': new_c.copy(),  # Make sure to use copy to avoid reference issues
+                'A': original_A.copy(),
+                'b': new_b.copy()
+            }
+            st.session_state.auto_solve = True  # Flag to trigger automatic solving
+            st.rerun()  # Force a rerun of the app
+    else:
+        # Calculate new objective value using sensitivity information
+        shadow_prices = sensitivity.shadow_prices()
+        delta_obj = 0
+
+        # Effect of RHS changes
+        for i in range(solver.m):
+            delta_b = new_b[i] - original_b[i]
+            delta_obj += shadow_prices[i] * delta_b
+
+        # Effect of objective coefficient changes
+        for j in range(solver.n):
+            if sensitivity.optimal_solution[j] > 0:  # Only for basic variables with positive values
+                delta_c = new_c[j] - original_c[j]
+                delta_obj += delta_c * sensitivity.optimal_solution[j]
+
+        new_obj = sensitivity.optimal_obj + delta_obj
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(
+                "Original Objective Value",
+                f"{sensitivity.optimal_obj:.4f}"
+            )
+        with col2:
+            st.metric(
+                "New Objective Value",
+                f"{new_obj:.4f}",
+                f"{new_obj - sensitivity.optimal_obj:.4f}"
+            )
+
+        # If it's a 2D problem, visualize the combined effect
+        if solver.n == 2:
+            st.subheader("Visualization of Changes")
+
+            fig = plot_combined_sensitivity(
+                solver, original_c, new_c, original_A, original_b, new_b,
+                sensitivity.optimal_solution
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+
+def display_sensitivity_analysis(solver, original_c, original_A, original_b, use_fractions=False):
+    """
+    Display sensitivity analysis results in the Streamlit UI.
+    """
+    # Import necessary libraries
+    from simplex import SensitivityAnalysis
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    import pandas as pd
+    import numpy as np
+
+    # Perform sensitivity analysis
+    sensitivity = SensitivityAnalysis(solver)
+
+    st.header("Sensitivity Analysis")
+
+    # Create tabs
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Objective Coefficients",
+        "Right-Hand Side",
+        "Shadow Prices",
+        "What-If Analysis"
+    ])
+
+    # Tab 1: Objective Coefficient Sensitivity
+    with tab1:
+        st.subheader("Objective Function Coefficient Sensitivity")
+
+        obj_sensitivity = sensitivity.objective_sensitivity_analysis()
+
+        # Convert to DataFrame for better display
+        obj_data = []
+        for j in range(solver.n):
+            if j in obj_sensitivity:
+                current_value = original_c[j]
+                lower, upper = obj_sensitivity[j]
+
+                # Calculate allowable changes
+                delta_lower = "Any decrease" if lower == -np.inf else f"{current_value - lower:.4f}"
+                delta_upper = "Any increase" if upper == np.inf else f"{upper - current_value:.4f}"
+
+                obj_data.append({
+                    "Variable": f"x{j + 1}",
+                    "Current Value": f"{current_value:.4f}",
+                    "Lower Bound": "-∞" if lower == -np.inf else f"{lower:.4f}",
+                    "Upper Bound": "+∞" if upper == np.inf else f"{upper:.4f}",
+                    "Allowable Decrease": delta_lower,
+                    "Allowable Increase": delta_upper
+                })
+
+        if obj_data:
+            obj_df = pd.DataFrame(obj_data)
+            st.dataframe(obj_df, use_container_width=True)
+
+            # Interactive analysis code
+            st.subheader("Interactive Objective Coefficient Analysis")
+
+            # Select a variable to analyze
+            selected_var = st.selectbox(
+                "Select variable to analyze:",
+                [f"x{j + 1}" for j in range(solver.n)],
+                key="obj_tab_select"
+            )
+            j = int(selected_var[1:]) - 1
+
+            if j in obj_sensitivity:
+                current_value = original_c[j]
+                lower, upper = obj_sensitivity[j]
+
+                # Create a slider for adjusting the coefficient
+                min_val = max(lower, current_value - 10) if lower != -np.inf else current_value - 10
+                max_val = min(upper, current_value + 10) if upper != np.inf else current_value + 10
+
+                new_value = st.slider(
+                    f"Adjusted coefficient for {selected_var}:",
+                    float(min_val),
+                    float(max_val),
+                    float(current_value),
+                    step=0.1,
+                    key="obj_tab_slider"
+                )
+
+                # Show effect on objective value if within allowable range
+                is_within_range = (lower == -np.inf or new_value >= lower) and (upper == np.inf or new_value <= upper)
+
+                if is_within_range:
+                    # Calculate the new objective value
+                    delta_c = new_value - current_value
+                    new_obj = sensitivity.optimal_obj + delta_c * sensitivity.optimal_solution[j]
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric(
+                            "Original Objective Value",
+                            f"{sensitivity.optimal_obj:.4f}"
+                        )
+                    with col2:
+                        st.metric(
+                            "New Objective Value",
+                            f"{new_obj:.4f}",
+                            f"{new_obj - sensitivity.optimal_obj:.4f}"
+                        )
+
+                    # If it's a 2D problem, visualize the change
+                    if solver.n == 2 and j < 2:
+                        st.subheader("Effect on Objective Function")
+
+                        # Calculate new objective function
+                        new_c = original_c.copy()
+                        new_c[j] = new_value
+
+                        # Create a visualization
+                        fig = plot_objective_sensitivity(
+                            solver, original_c, new_c,
+                            sensitivity.optimal_solution,
+                            j, sensitivity.optimal_obj, new_obj
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("The selected value is outside the allowable range. The optimal basis would change.")
+            else:
+                st.info("No sensitivity information available for this variable.")
+
+    # Tab 2: Right-Hand Side Sensitivity
+    with tab2:
+        st.subheader("Right-Hand Side Sensitivity")
+
+        rhs_sensitivity = sensitivity.rhs_sensitivity_analysis()
+
+        # Convert to DataFrame for better display
+        rhs_data = []
+        for i in range(solver.m):
+            if i in rhs_sensitivity:
+                current_value = original_b[i]
+                lower, upper = rhs_sensitivity[i]
+
+                # Calculate allowable changes
+                delta_lower = "Any decrease" if lower == -np.inf else f"{current_value - lower:.4f}"
+                delta_upper = "Any increase" if upper == np.inf else f"{upper - current_value:.4f}"
+
+                rhs_data.append({
+                    "Constraint": f"Constraint {i + 1}",
+                    "Current RHS": f"{current_value:.4f}",
+                    "Lower Bound": "-∞" if lower == -np.inf else f"{lower:.4f}",
+                    "Upper Bound": "+∞" if upper == np.inf else f"{upper:.4f}",
+                    "Allowable Decrease": delta_lower,
+                    "Allowable Increase": delta_upper
+                })
+
+        if rhs_data:
+            rhs_df = pd.DataFrame(rhs_data)
+            st.dataframe(rhs_df, use_container_width=True)
+
+            # Create an interactive visualization
+            st.subheader("Interactive RHS Analysis")
+
+            # Select a constraint to analyze
+            selected_constraint = st.selectbox(
+                "Select constraint to analyze:",
+                [f"Constraint {i + 1}" for i in range(solver.m)],
+                key="rhs_tab_select"
+            )
+            i = int(selected_constraint.split()[-1]) - 1
+
+            if i in rhs_sensitivity:
+                current_value = original_b[i]
+                lower, upper = rhs_sensitivity[i]
+
+                # Create a slider for adjusting the RHS
+                min_val = max(lower, current_value - 10) if lower != -np.inf else current_value - 10
+                max_val = min(upper, current_value + 10) if upper != np.inf else current_value + 10
+
+                new_value = st.slider(
+                    f"Adjusted RHS for {selected_constraint}:",
+                    float(min_val),
+                    float(max_val),
+                    float(current_value),
+                    step=0.1,
+                    key="rhs_tab_slider"
+                )
+
+                # Show effect on objective value if within allowable range
+                is_within_range = (lower == -np.inf or new_value >= lower) and (upper == np.inf or new_value <= upper)
+
+                if is_within_range:
+                    # Get shadow price for this constraint
+                    shadow_prices = sensitivity.shadow_prices()
+                    shadow_price = shadow_prices[i]
+
+                    # Calculate the new objective value
+                    delta_b = new_value - current_value
+                    new_obj = sensitivity.optimal_obj + shadow_price * delta_b
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric(
+                            "Original Objective Value",
+                            f"{sensitivity.optimal_obj:.4f}"
+                        )
+                    with col2:
+                        st.metric(
+                            "New Objective Value",
+                            f"{new_obj:.4f}",
+                            f"{new_obj - sensitivity.optimal_obj:.4f}"
+                        )
+
+                    # If it's a 2D problem, visualize the change
+                    if solver.n == 2:
+                        st.subheader("Effect on Feasible Region")
+
+                        # Create a new b vector
+                        new_b = original_b.copy()
+                        new_b[i] = new_value
+
+                        # Create a visualization
+                        fig = plot_rhs_sensitivity(
+                            solver, original_A, original_b, new_b,
+                            sensitivity.optimal_solution, i
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("The selected value is outside the allowable range. The optimal basis would change.")
+            else:
+                st.info("No sensitivity information available for this constraint.")
+
+    # Tab 3: Shadow Prices
+    with tab3:
+        st.subheader("Shadow Prices (Dual Values)")
+
+        shadow_prices = sensitivity.shadow_prices()
+
+        # Convert to DataFrame for better display
+        shadow_data = []
+        for i in range(solver.m):
+            shadow_data.append({
+                "Constraint": f"Constraint {i + 1}",
+                "Shadow Price": f"{shadow_prices[i]:.4f}",
+                "Interpretation": "Increasing the RHS by 1 unit would change the objective value by this amount"
+            })
+
+        if shadow_data:
+            shadow_df = pd.DataFrame(shadow_data)
+            st.dataframe(shadow_df, use_container_width=True)
+
+            # Create a bar chart of shadow prices
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=[f"Constraint {i + 1}" for i in range(solver.m)],
+                    y=shadow_prices,
+                    marker_color='royalblue'
+                )
+            ])
+            fig.update_layout(
+                title="Shadow Prices by Constraint",
+                xaxis_title="Constraint",
+                yaxis_title="Shadow Price",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.write("""
+            **What are Shadow Prices?**
+
+            Shadow prices represent the rate of change in the objective function value per unit change in the right-hand side of the constraint.
+
+            - A **positive** shadow price means that increasing the resource (right-hand side) will increase the objective value
+            - A **negative** shadow price means that increasing the resource will decrease the objective value
+            - A **zero** shadow price indicates that the constraint is not binding at the optimal solution
+            """)
+
+    # Tab 4: What-If Analysis
+    with tab4:
+        st.subheader("What-If Analysis")
+
+        st.write("""
+        Use this tool to explore how changes to multiple parameters simultaneously affect your optimal solution.
+        """)
+
+        # Create two columns
+        col1, col2 = st.columns(2)
+
+        # Column 1: Objective coefficients
+        with col1:
+            st.write("**Objective Coefficients**")
+
+            # Create sliders for each objective coefficient
+            new_c = original_c.copy()
+            obj_sensitivity = sensitivity.objective_sensitivity_analysis()
+
+            for j in range(solver.n):
+                if j in obj_sensitivity:
+                    current_value = original_c[j]
+                    lower, upper = obj_sensitivity[j]
+
+                    # Set reasonable bounds for the slider
+                    min_val = max(lower, current_value - 5) if lower != -np.inf else current_value - 5
+                    max_val = min(upper, current_value + 5) if upper != np.inf else current_value + 5
+
+                    new_c[j] = st.slider(
+                        f"c{j + 1} ({current_value})",
+                        float(min_val),
+                        float(max_val),
+                        float(current_value),
+                        step=0.1,
+                        key=f"whatif_slider_c_{j}"
+                    )
+
+        # Column 2: RHS values
+        with col2:
+            st.write("**Right-Hand Side Values**")
+
+            # Create sliders for each RHS value
+            new_b = original_b.copy()
+            rhs_sensitivity = sensitivity.rhs_sensitivity_analysis()
+
+            for i in range(solver.m):
+                if i in rhs_sensitivity:
+                    current_value = original_b[i]
+                    lower, upper = rhs_sensitivity[i]
+
+                    # Set reasonable bounds for the slider
+                    min_val = max(lower, current_value - 5) if lower != -np.inf else current_value - 5
+                    max_val = min(upper, current_value + 5) if upper != np.inf else current_value + 5
+
+                    new_b[i] = st.slider(
+                        f"b{i + 1} ({current_value})",
+                        float(min_val),
+                        float(max_val),
+                        float(current_value),
+                        step=0.1,
+                        key=f"whatif_slider_b_{i}"
+                    )
+
+        # Check if any parameter is outside its sensitivity range
+        obj_outside_range = False
+        for j in range(solver.n):
+            if j in obj_sensitivity:
+                lower, upper = obj_sensitivity[j]
+                if (lower != -np.inf and new_c[j] < lower) or (upper != np.inf and new_c[j] > upper):
+                    obj_outside_range = True
+                    break
+
+        rhs_outside_range = False
+        for i in range(solver.m):
+            if i in rhs_sensitivity:
+                lower, upper = rhs_sensitivity[i]
+                if (lower != -np.inf and new_b[i] < lower) or (upper != np.inf and new_b[i] > upper):
+                    rhs_outside_range = True
+                    break
+
+        if obj_outside_range or rhs_outside_range:
+            st.warning(
+                "One or more parameters are outside their sensitivity ranges. The optimal basis would change, requiring a re-solve of the problem.")
+
+            # Offer option to re-solve with improved tab preservation
+            if st.button("Re-solve with new parameters", key="resolve_button"):
+                # Store the new parameters in session state
+                st.session_state.sensitivity_resample = {
+                    'c': new_c.copy(),
+                    'A': original_A.copy(),
+                    'b': new_b.copy()
+                }
+                st.session_state.auto_solve = True
+                st.session_state.active_tab = 3  # Set to What-If Analysis tab
+                st.session_state.coming_from_whatif = True
+                st.rerun()
+        else:
+            # Calculate new objective value using sensitivity information
+            shadow_prices = sensitivity.shadow_prices()
+            delta_obj = 0
+
+            # Effect of RHS changes
+            for i in range(solver.m):
+                delta_b = new_b[i] - original_b[i]
+                delta_obj += shadow_prices[i] * delta_b
+
+            # Effect of objective coefficient changes
+            for j in range(solver.n):
+                if sensitivity.optimal_solution[j] > 0:
+                    delta_c = new_c[j] - original_c[j]
+                    delta_obj += delta_c * sensitivity.optimal_solution[j]
+
+            new_obj = sensitivity.optimal_obj + delta_obj
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(
+                    "Original Objective Value",
+                    f"{sensitivity.optimal_obj:.4f}"
+                )
+            with col2:
+                st.metric(
+                    "New Objective Value",
+                    f"{new_obj:.4f}",
+                    f"{new_obj - sensitivity.optimal_obj:.4f}"
+                )
+
+            # If it's a 2D problem, visualize the combined effect
+            if solver.n == 2:
+                st.subheader("Visualization of Changes")
+
+                fig = plot_combined_sensitivity(
+                    solver, original_c, new_c, original_A, original_b, new_b,
+                    sensitivity.optimal_solution
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    # Track which tab is selected for next time
+    if tab4.selected:
+        st.session_state.active_tab = 3
+    elif tab3.selected:
+        st.session_state.active_tab = 2
+    elif tab2.selected:
+        st.session_state.active_tab = 1
+    elif tab1.selected:
+        st.session_state.active_tab = 0
+
+
+
+def plot_objective_sensitivity(solver, original_c, new_c, optimal_solution, changed_index, original_obj, new_obj):
+    """
+    Create a visualization showing how changing an objective coefficient affects the problem.
+
+    Parameters:
+    -----------
+    solver : PrimalSimplex
+        The solved simplex instance.
+    original_c : array-like
+        Original objective function coefficients.
+    new_c : array-like
+        New objective function coefficients.
+    optimal_solution : array-like
+        Optimal solution vector.
+    changed_index : int
+        Index of the coefficient that was changed.
+    original_obj : float
+        Original optimal objective value.
+    new_obj : float
+        New optimal objective value.
+
+    Returns:
+    --------
+    plotly.graph_objects.Figure: The visualization figure.
+    """
+    # Create a grid of points
+    x = np.linspace(0, max(20, optimal_solution[0] * 2), 100)
+    y = np.linspace(0, max(20, optimal_solution[1] * 2), 100)
+    X, Y = np.meshgrid(x, y)
+
+    # Calculate Z values for original and new objective functions
+    Z_original = original_c[0] * X + original_c[1] * Y
+    Z_new = new_c[0] * X + new_c[1] * Y
+
+    # Create subplots
+    fig = make_subplots(rows=1, cols=2,
+                        subplot_titles=["Original Objective", "New Objective"],
+                        shared_yaxes=True)
+
+    # Add contour plots for both objective functions
+    fig.add_trace(
+        go.Contour(
+            z=Z_original,
+            x=x,
+            y=y,
+            colorscale='Blues',
+            showscale=False,
+            contours=dict(
+                showlabels=True,
+                labelfont=dict(size=10, color='white')
+            )
+        ),
+        row=1, col=1
+    )
+
+    fig.add_trace(
+        go.Contour(
+            z=Z_new,
+            x=x,
+            y=y,
+            colorscale='Reds',
+            showscale=False,
+            contours=dict(
+                showlabels=True,
+                labelfont=dict(size=10, color='white')
+            )
+        ),
+        row=1, col=2
+    )
+
+    # Add optimal point to both plots
+    fig.add_trace(
+        go.Scatter(
+            x=[optimal_solution[0]],
+            y=[optimal_solution[1]],
+            mode='markers',
+            marker=dict(color='green', size=10, symbol='star'),
+            name='Optimal Solution'
+        ),
+        row=1, col=1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[optimal_solution[0]],
+            y=[optimal_solution[1]],
+            mode='markers',
+            marker=dict(color='green', size=10, symbol='star'),
+            name='Optimal Solution'
+        ),
+        row=1, col=2
+    )
+
+    # Add annotations for objective values
+    fig.add_annotation(
+        x=optimal_solution[0] + 1,
+        y=optimal_solution[1] + 1,
+        text=f"Obj: {original_obj:.2f}",
+        showarrow=True,
+        arrowhead=2,
+        row=1, col=1
+    )
+
+    fig.add_annotation(
+        x=optimal_solution[0] + 1,
+        y=optimal_solution[1] + 1,
+        text=f"Obj: {new_obj:.2f}",
+        showarrow=True,
+        arrowhead=2,
+        row=1, col=2
+    )
+
+    # Update layout
+    fig.update_layout(
+        title=f"Effect of Changing c{changed_index + 1} from {original_c[changed_index]} to {new_c[changed_index]}",
+        height=500,
+        margin=dict(l=0, r=0, t=50, b=0)
+    )
+
+    # Update axes labels
+    fig.update_xaxes(title_text="x₁", row=1, col=1)
+    fig.update_xaxes(title_text="x₁", row=1, col=2)
+    fig.update_yaxes(title_text="x₂", row=1, col=1)
+
+    return fig
+
+
+def plot_rhs_sensitivity(solver, A, original_b, new_b, optimal_solution, changed_index):
+    """
+    Create a visualization showing how changing a RHS value affects the feasible region.
+
+    Parameters:
+    -----------
+    solver : PrimalSimplex
+        The solved simplex instance.
+    A : array-like
+        Constraint coefficients matrix.
+    original_b : array-like
+        Original right-hand side values.
+    new_b : array-like
+        New right-hand side values.
+    optimal_solution : array-like
+        Optimal solution vector.
+    changed_index : int
+        Index of the RHS value that was changed.
+
+    Returns:
+    --------
+    plotly.graph_objects.Figure: The visualization figure.
+    """
+    # Create a grid of points
+    x = np.linspace(0, max(20, optimal_solution[0] * 2), 100)
+    y = np.linspace(0, max(20, optimal_solution[1] * 2), 100)
+    X, Y = np.meshgrid(x, y)
+
+    # Create figure
+    fig = go.Figure()
+
+    # Add constraint lines for original problem
+    for i in range(solver.m):
+        a, b = A[i, 0], A[i, 1]
+        if a == 0:  # Horizontal line
+            y_val = original_b[i] / b
+            fig.add_trace(
+                go.Scatter(
+                    x=[0, x[-1]],
+                    y=[y_val, y_val],
+                    mode='lines',
+                    line=dict(color='blue', width=2, dash='dash' if i != changed_index else 'solid'),
+                    name=f'Original Constraint {i + 1}'
+                )
+            )
+        elif b == 0:  # Vertical line
+            x_val = original_b[i] / a
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_val, x_val],
+                    y=[0, y[-1]],
+                    mode='lines',
+                    line=dict(color='blue', width=2, dash='dash' if i != changed_index else 'solid'),
+                    name=f'Original Constraint {i + 1}'
+                )
+            )
+        else:  # General line
+            y_vals = (original_b[i] - a * x) / b
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y_vals,
+                    mode='lines',
+                    line=dict(color='blue', width=2, dash='dash' if i != changed_index else 'solid'),
+                    name=f'Original Constraint {i + 1}'
+                )
+            )
+
+    # Add constraint line for changed constraint with new RHS
+    i = changed_index
+    a, b = A[i, 0], A[i, 1]
+    if a == 0:  # Horizontal line
+        y_val = new_b[i] / b
+        fig.add_trace(
+            go.Scatter(
+                x=[0, x[-1]],
+                y=[y_val, y_val],
+                mode='lines',
+                line=dict(color='red', width=2),
+                name=f'New Constraint {i + 1}'
+            )
+        )
+    elif b == 0:  # Vertical line
+        x_val = new_b[i] / a
+        fig.add_trace(
+            go.Scatter(
+                x=[x_val, x_val],
+                y=[0, y[-1]],
+                mode='lines',
+                line=dict(color='red', width=2),
+                name=f'New Constraint {i + 1}'
+            )
+        )
+    else:  # General line
+        y_vals = (new_b[i] - a * x) / b
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y_vals,
+                mode='lines',
+                line=dict(color='red', width=2),
+                name=f'New Constraint {i + 1}'
+            )
+        )
+
+    # Add optimal point
+    fig.add_trace(
+        go.Scatter(
+            x=[optimal_solution[0]],
+            y=[optimal_solution[1]],
+            mode='markers',
+            marker=dict(color='green', size=10, symbol='star'),
+            name='Optimal Solution'
+        )
+    )
+
+    # Add axis lines
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 0],
+            y=[0, y[-1]],
+            mode='lines',
+            line=dict(color='black', width=1),
+            showlegend=False
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[0, x[-1]],
+            y=[0, 0],
+            mode='lines',
+            line=dict(color='black', width=1),
+            showlegend=False
+        )
+    )
+
+    # Update layout
+    fig.update_layout(
+        title=f"Effect of Changing b{changed_index + 1} from {original_b[changed_index]} to {new_b[changed_index]}",
+        xaxis_title="x₁",
+        yaxis_title="x₂",
+        height=500,
+        margin=dict(l=0, r=0, t=50, b=0)
+    )
+
+    return fig
+
+
+def plot_combined_sensitivity(solver, original_c, new_c, A, original_b, new_b, optimal_solution):
+    """
+    Create a visualization showing combined effect of changing objective and RHS values.
+
+    Parameters:
+    -----------
+    solver : PrimalSimplex
+        The solved simplex instance.
+    original_c : array-like
+        Original objective function coefficients.
+    new_c : array-like
+        New objective function coefficients.
+    A : array-like
+        Constraint coefficients matrix.
+    original_b : array-like
+        Original right-hand side values.
+    new_b : array-like
+        New right-hand side values.
+    optimal_solution : array-like
+        Optimal solution vector.
+
+    Returns:
+    --------
+    plotly.graph_objects.Figure: The visualization figure.
+    """
+    # Create a grid of points
+    x = np.linspace(0, max(20, optimal_solution[0] * 2), 100)
+    y = np.linspace(0, max(20, optimal_solution[1] * 2), 100)
+    X, Y = np.meshgrid(x, y)
+
+    # Calculate Z values for original and new objective functions
+    Z_original = original_c[0] * X + original_c[1] * Y
+    Z_new = new_c[0] * X + new_c[1] * Y
+
+    # Create figure
+    fig = make_subplots(rows=1, cols=2,
+                        subplot_titles=["Original Problem", "Modified Problem"],
+                        shared_yaxes=True)
+
+    # Add contour plots for both objective functions
+    fig.add_trace(
+        go.Contour(
+            z=Z_original,
+            x=x,
+            y=y,
+            colorscale='Blues',
+            showscale=False,
+            contours=dict(
+                showlabels=True,
+                labelfont=dict(size=10, color='white')
+            )
+        ),
+        row=1, col=1
+    )
+
+    fig.add_trace(
+        go.Contour(
+            z=Z_new,
+            x=x,
+            y=y,
+            colorscale='Reds',
+            showscale=False,
+            contours=dict(
+                showlabels=True,
+                labelfont=dict(size=10, color='white')
+            )
+        ),
+        row=1, col=2
+    )
+
+    # Add constraint lines for original problem
+    for i in range(solver.m):
+        a, b = A[i, 0], A[i, 1]
+        if a == 0:  # Horizontal line
+            y_val = original_b[i] / b
+            fig.add_trace(
+                go.Scatter(
+                    x=[0, x[-1]],
+                    y=[y_val, y_val],
+                    mode='lines',
+                    line=dict(color='blue', width=2),
+                    name=f'Original Constraint {i + 1}'
+                ),
+                row=1, col=1
+            )
+        elif b == 0:  # Vertical line
+            x_val = original_b[i] / a
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_val, x_val],
+                    y=[0, y[-1]],
+                    mode='lines',
+                    line=dict(color='blue', width=2),
+                    name=f'Original Constraint {i + 1}'
+                ),
+                row=1, col=1
+            )
+        else:  # General line
+            y_vals = (original_b[i] - a * x) / b
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y_vals,
+                    mode='lines',
+                    line=dict(color='blue', width=2),
+                    name=f'Original Constraint {i + 1}'
+                ),
+                row=1, col=1
+            )
+
+    # Add constraint lines for new problem
+    for i in range(solver.m):
+        a, b = A[i, 0], A[i, 1]
+        if a == 0:  # Horizontal line
+            y_val = new_b[i] / b
+            fig.add_trace(
+                go.Scatter(
+                    x=[0, x[-1]],
+                    y=[y_val, y_val],
+                    mode='lines',
+                    line=dict(color='red', width=2),
+                    name=f'New Constraint {i + 1}'
+                ),
+                row=1, col=2
+            )
+        elif b == 0:  # Vertical line
+            x_val = new_b[i] / a
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_val, x_val],
+                    y=[0, y[-1]],
+                    mode='lines',
+                    line=dict(color='red', width=2),
+                    name=f'New Constraint {i + 1}'
+                ),
+                row=1, col=2
+            )
+        else:  # General line
+            y_vals = (new_b[i] - a * x) / b
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y_vals,
+                    mode='lines',
+                    line=dict(color='red', width=2),
+                    name=f'New Constraint {i + 1}'
+                ),
+                row=1, col=2
+            )
+
+    # Add optimal point
+    fig.add_trace(
+        go.Scatter(
+            x=[optimal_solution[0]],
+            y=[optimal_solution[1]],
+            mode='markers',
+            marker=dict(color='green', size=10, symbol='star'),
+            name='Optimal Solution'
+        ),
+        row=1, col=1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[optimal_solution[0]],
+            y=[optimal_solution[1]],
+            mode='markers',
+            marker=dict(color='green', size=10, symbol='star'),
+            name='Optimal Solution'
+        ),
+        row=1, col=2
+    )
+
+    # Add axis lines to both subplots
+    for col in [1, 2]:
+        fig.add_trace(
+            go.Scatter(
+                x=[0, 0],
+                y=[0, y[-1]],
+                mode='lines',
+                line=dict(color='black', width=1),
+                showlegend=False
+            ),
+            row=1, col=col
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[0, x[-1]],
+                y=[0, 0],
+                mode='lines',
+                line=dict(color='black', width=1),
+                showlegend=False
+            ),
+            row=1, col=col
+        )
+
+    # Update layout
+    fig.update_layout(
+        title="Combined Effect of Parameter Changes",
+        height=500,
+        margin=dict(l=0, r=0, t=50, b=0),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5
+        )
+    )
+
+    # Update axes labels
+    fig.update_xaxes(title_text="x₁", row=1, col=1)
+    fig.update_xaxes(title_text="x₁", row=1, col=2)
+    fig.update_yaxes(title_text="x₂", row=1, col=1)
+
+    return fig
+
+
+def initialize_session_state():
+    """Initialize all required session state variables"""
     if 'solution_storage' not in st.session_state:
         st.session_state.solution_storage = None
     if 'tableaus' not in st.session_state:
         st.session_state.tableaus = []  # Will store tuples of (iteration, tableau, solver, pivot_info)
     if 'has_solved' not in st.session_state:
         st.session_state.has_solved = False
+    if 'sensitivity_resample' not in st.session_state:
+        st.session_state.sensitivity_resample = None
+    if 'auto_solve' not in st.session_state:
+        st.session_state.auto_solve = False
+
+
+def main():
+    # Initialize session state variables
+    if 'solution_storage' not in st.session_state:
+        st.session_state.solution_storage = None
+    if 'tableaus' not in st.session_state:
+        st.session_state.tableaus = []  # Will store tuples of (iteration, tableau, solver, pivot_info)
+    if 'has_solved' not in st.session_state:
+        st.session_state.has_solved = False
+    if 'sensitivity_resample' not in st.session_state:
+        st.session_state.sensitivity_resample = None
+    if 'auto_solve' not in st.session_state:
+        st.session_state.auto_solve = False
+    if 'solver' not in st.session_state:
+        st.session_state.solver = None
+    if 'original_params' not in st.session_state:
+        st.session_state.original_params = None
+    if 'active_tab' not in st.session_state:
+        st.session_state.active_tab = 0  # Default to first tab
+    if 'coming_from_whatif' not in st.session_state:
+        st.session_state.coming_from_whatif = False
 
     st.title("Linear Programming Solver")
     st.write("Solve linear programming problems using the Primal Simplex method")
+
+    # Preserve sidebar state when coming from What-If analysis
+    if st.session_state.coming_from_whatif and st.session_state.sensitivity_resample is not None:
+        # Force sidebar to be expanded
+        st.sidebar.markdown(
+            '<script>setTimeout(function() {if (document.getElementsByClassName("css-1adrfps e1fqkh3o2")[0].style.width === "0px") {document.getElementsByClassName("css-1adrfps e1fqkh3o2")[0].style.width="250px";}}, 100);</script>',
+            unsafe_allow_html=True
+        )
+        # Reset the flag after showing sidebar
+        st.session_state.coming_from_whatif = False
 
     # Sidebar for problem setup
     st.sidebar.header("Problem Setup")
@@ -695,9 +1786,18 @@ def main():
     # Option to use example problem
     use_example = st.sidebar.checkbox("Use example problem", key='use_example')
 
+    # Get problem parameters
     if use_example:
         c, A, b = create_example_problem()
         m, n = A.shape
+    elif st.session_state.sensitivity_resample is not None:
+        # Use the resampled parameters from sensitivity analysis
+        c = st.session_state.sensitivity_resample['c']
+        A = st.session_state.sensitivity_resample['A']
+        b = st.session_state.sensitivity_resample['b']
+        m, n = A.shape
+
+        st.info("Using modified parameters from sensitivity analysis")
     else:
         # Get dimensions
         col1, col2 = st.sidebar.columns(2)
@@ -766,17 +1866,34 @@ def main():
     st.header("Problem Formulation")
     st.latex(format_lp_problem(c, A, b, n, m, eq_constraints))
 
-    # Solve button
-    if st.button("Solve", key='solve_button'):
+    # Solve button or auto-solve from sensitivity analysis
+    should_solve = st.button("Solve", key='solve_button') or st.session_state.auto_solve
+
+    if should_solve:
+        # Reset auto_solve flag
+        st.session_state.auto_solve = False
+
+        # Set solve flag
         st.session_state.has_solved = True
+
         # Clear previous tableaus when solving new problem
         st.session_state.tableaus = []
 
         st.header("Solution Process")
         try:
+            # Import the sensitivity analysis module
+            from simplex import PrimalSimplex, SensitivityAnalysis
+
             # Create solver instance with fractions
             solver = PrimalSimplex(c, A, b, use_fractions=True, fraction_digits=fraction_digits,
                                    eq_constraints=eq_constraints)
+
+            # Store original parameters for sensitivity analysis
+            st.session_state.original_params = {
+                'c': c.copy(),
+                'A': A.copy(),
+                'b': b.copy()
+            }
 
             # Store initial tableau (no pivot info for first tableau)
             iteration = 0
@@ -820,6 +1937,12 @@ def main():
                 decimal_optimal
             )
 
+            # Store solver for sensitivity analysis
+            st.session_state.solver = solver
+
+            # Clear sensitivity_resample after successfully solving
+            st.session_state.sensitivity_resample = None
+
         except Exception as e:
             st.error(f"Error solving problem: {str(e)}")
             return
@@ -837,9 +1960,9 @@ def main():
                 display_iteration(iteration, tableau, solver, use_fractions, fraction_digits, pivot_info)
 
     # Display final solution if available
-    if st.session_state.solution_storage is not None:
+    if st.session_state.solution_storage is not None and st.session_state.solver is not None:
         st.header("Optimal Solution")
-        display_solution(solver, use_fractions)
+        display_solution(st.session_state.solver, use_fractions)
 
         # Add visualization for 2D problems
         if len(c) == 2:
@@ -873,166 +1996,32 @@ def main():
 
                 elif viz_option == "Show full problem (may be zoomed out)":
                     # Create a matplotlib figure that shows the full problem
-                    import matplotlib.pyplot as plt
-                    import matplotlib.patches as patches
-
-                    fig, ax = plt.subplots(figsize=(10, 8))
-
-                    # Set bounds to fully contain the solution
-                    x_max = max(200, solution[0] * 1.2)
-                    y_max = max(200, solution[1] * 1.2)
-
-                    # Draw constraints
-                    constraint_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
-
-                    for i in range(len(b)):
-                        a1, a2 = A[i]
-                        if a1 == 0 and a2 == 0:
-                            continue
-
-                        color = constraint_colors[i % len(constraint_colors)]
-
-                        if a2 == 0:  # Vertical line
-                            x_val = b[i] / a1
-                            if 0 <= x_val <= x_max * 1.1:
-                                ax.axvline(x=x_val, color=color, linewidth=2.5,
-                                           label=f'Constraint {i + 1}: {a1}x₁ + {a2}x₂ ≤ {b[i]}')
-                        elif a1 == 0:  # Horizontal line
-                            y_val = b[i] / a2
-                            if 0 <= y_val <= y_max * 1.1:
-                                ax.axhline(y=y_val, color=color, linewidth=2.5,
-                                           label=f'Constraint {i + 1}: {a1}x₁ + {a2}x₂ ≤ {b[i]}')
-                        else:  # Regular line
-                            # Calculate endpoints that span the entire visible area
-                            x_vals = [0, x_max]
-                            y_vals = [(b[i] - a1 * x) / a2 for x in x_vals]
-
-                            # Filter out points with negative y
-                            valid_points = [(x, y) for x, y in zip(x_vals, y_vals) if y >= 0]
-
-                            # If we lost points due to negative y, add points at y=0
-                            if len(valid_points) < 2:
-                                x_at_y0 = b[i] / a1
-                                if 0 <= x_at_y0 <= x_max:
-                                    valid_points.append((x_at_y0, 0))
-
-                            # If we have at least 2 valid points, plot the line
-                            if len(valid_points) >= 2:
-                                xs, ys = zip(*valid_points)
-                                ax.plot(xs, ys, color=color, linewidth=2.5,
-                                        label=f'Constraint {i + 1}: {a1}x₁ + {a2}x₂ ≤ {b[i]}')
-
-                    # Draw non-negativity constraints
-                    ax.axvline(x=0, color='black', linestyle='-', linewidth=2.5, label='x₁ ≥ 0')
-                    ax.axhline(y=0, color='black', linestyle='-', linewidth=2.5, label='x₂ ≥ 0')
-
-                    # Mark the optimal solution
-                    ax.scatter(solution[0], solution[1], color='red', s=150, marker='*',
-                               label=f'Optimal Solution ({solution[0]:.2f}, {solution[1]:.2f})')
-
-                    # Calculate objective value
-                    obj_value = c[0] * solution[0] + c[1] * solution[1]
-
-                    # Annotate the solution
-                    ax.annotate(f'Objective value: {obj_value:.2f}',
-                                xy=(solution[0], solution[1]),
-                                xytext=(solution[0] * 0.9, solution[1] * 0.9),
-                                arrowprops=dict(facecolor='black', shrink=0.05, width=1.5))
-
-                    # Set labels and title
-                    ax.set_xlim(0, x_max)
-                    ax.set_ylim(0, y_max)
-                    ax.set_xlabel('x₁', fontsize=12)
-                    ax.set_ylabel('x₂', fontsize=12)
-                    ax.set_title('Full Problem Visualization (Zoomed Out)', fontsize=14)
-                    ax.grid(True, alpha=0.3)
-
-                    # Add legend with smaller font size
-                    ax.legend(loc='upper right', fontsize=9)
-
-                    plt.tight_layout()
+                    fig = plot_full_problem(c, A, b, solution)
                     st.pyplot(fig)
 
                 else:  # Focus around solution
-                    # Create a zoomed-in view focused on the solution area
-                    import matplotlib.pyplot as plt
-
-                    fig, ax = plt.subplots(figsize=(10, 8))
-
-                    # Set bounds to focus around the solution
-                    margin = 30  # Margin around solution to show
-                    x_min = max(0, solution[0] - margin)
-                    y_min = max(0, solution[1] - margin)
-                    x_max = solution[0] + margin
-                    y_max = solution[1] + margin
-
-                    # Draw constraints
-                    constraint_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
-
-                    for i in range(len(b)):
-                        a1, a2 = A[i]
-                        if a1 == 0 and a2 == 0:
-                            continue
-
-                        color = constraint_colors[i % len(constraint_colors)]
-
-                        if a2 == 0:  # Vertical line
-                            x_val = b[i] / a1
-                            if x_min <= x_val <= x_max:
-                                ax.axvline(x=x_val, color=color, linewidth=2.5,
-                                           label=f'Constraint {i + 1}: {a1}x₁ + {a2}x₂ ≤ {b[i]}')
-                        elif a1 == 0:  # Horizontal line
-                            y_val = b[i] / a2
-                            if y_min <= y_val <= y_max:
-                                ax.axhline(y=y_val, color=color, linewidth=2.5,
-                                           label=f'Constraint {i + 1}: {a1}x₁ + {a2}x₂ ≤ {b[i]}')
-                        else:  # Regular line
-                            # Calculate line endpoints for the visible area
-                            x_vals = [x_min, x_max]
-                            y_vals = [(b[i] - a1 * x) / a2 for x in x_vals]
-
-                            # Check if line is visible in the view window
-                            if any(y_min <= y <= y_max for y in y_vals):
-                                ax.plot(x_vals, y_vals, color=color, linewidth=2.5,
-                                        label=f'Constraint {i + 1}: {a1}x₁ + {a2}x₂ ≤ {b[i]}')
-
-                    # Draw axis lines if visible
-                    if x_min <= 0 <= x_max:
-                        ax.axvline(x=0, color='black', linestyle='-', linewidth=2.5, label='x₁ ≥ 0')
-                    if y_min <= 0 <= y_max:
-                        ax.axhline(y=0, color='black', linestyle='-', linewidth=2.5, label='x₂ ≥ 0')
-
-                    # Mark the optimal solution
-                    ax.scatter(solution[0], solution[1], color='red', s=150, marker='*',
-                               label=f'Optimal Solution ({solution[0]:.2f}, {solution[1]:.2f})')
-
-                    # Calculate objective value
-                    obj_value = c[0] * solution[0] + c[1] * solution[1]
-
-                    # Annotate the solution
-                    ax.annotate(f'Objective value: {obj_value:.2f}',
-                                xy=(solution[0], solution[1]),
-                                xytext=(solution[0] - margin * 0.2, solution[1] - margin * 0.2),
-                                arrowprops=dict(facecolor='black', shrink=0.05, width=1.5))
-
-                    # Set labels and title
-                    ax.set_xlim(x_min, x_max)
-                    ax.set_ylim(y_min, y_max)
-                    ax.set_xlabel('x₁', fontsize=12)
-                    ax.set_ylabel('x₂', fontsize=12)
-                    ax.set_title('Solution Focus Visualization', fontsize=14)
-                    ax.grid(True, alpha=0.3)
-
-                    # Add legend with smaller font size
-                    ax.legend(loc='upper right', fontsize=9)
-
-                    plt.tight_layout()
+                    # Create a visualization focused on the solution area
+                    fig = plot_solution_focus(c, A, b, solution)
                     st.pyplot(fig)
             else:
                 # For normal-scale problems, use the standard visualization
                 fig = plot_lp_problem(c, A, b, solution, "LP Problem Visualization")
                 st.pyplot(fig)
 
+        # Add sensitivity analysis section if the problem is solved
+        if st.session_state.solver is not None and st.session_state.original_params is not None:
+            # Display sensitivity analysis results
+            display_sensitivity_analysis(
+                st.session_state.solver,
+                st.session_state.original_params['c'],
+                st.session_state.original_params['A'],
+                st.session_state.original_params['b'],
+                use_fractions
+            )
+
+    # Clear resampled parameters if we didn't solve (this could happen if the user modified the form)
+    if not should_solve and st.session_state.sensitivity_resample is not None:
+        st.session_state.sensitivity_resample = None
 
 if __name__ == "__main__":
     main()
