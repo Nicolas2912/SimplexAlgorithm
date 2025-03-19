@@ -207,6 +207,9 @@ def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualizat
     fig : matplotlib.figure.Figure
         The matplotlib figure containing the visualization
     """
+    import numpy as np
+    import matplotlib.pyplot as plt
+
     if len(c) != 2:
         st.error("Visualization is only available for problems with 2 variables.")
         return None
@@ -215,8 +218,12 @@ def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualizat
     fig, ax = plt.subplots(figsize=(10, 8))
 
     # Set reasonable bounds for the plot
-    x_min, x_max = -1, max(20, solution[0] * 1.5 if solution is not None else 20)
-    y_min, y_max = -1, max(20, solution[1] * 1.5 if solution is not None else 20)
+    max_coeff = max(np.max(np.abs(A)), 1)
+    max_rhs = max(np.max(np.abs(b)), 1)
+    max_range = max(20, 2 * max_rhs / max_coeff)
+
+    x_min, x_max = -1, max_range
+    y_min, y_max = -1, max_range
 
     # Extend bounds if needed to include important points
     if solution is not None:
@@ -228,44 +235,86 @@ def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualizat
     y = np.linspace(y_min, y_max, 1000)
     X, Y = np.meshgrid(x, y)
 
-    # Plot and shade the feasible region
+    # Initialize mask for feasible region
     region_mask = np.ones_like(X, dtype=bool)
+
+    # Add non-negativity constraints to mask
+    region_mask &= (X >= 0) & (Y >= 0)
+
+    # Draw non-negativity constraints
+    ax.axvline(x=0, color='black', linestyle='-', linewidth=2, label='x₁ ≥ 0')
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=2, label='x₂ ≥ 0')
+
+    # Define colors for constraints
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22',
+              '#17becf']
 
     # Plot each constraint line
     for i in range(len(b)):
         if A[i, 0] == 0 and A[i, 1] == 0:
             continue  # Skip constraints with zero coefficients
 
+        color = colors[i % len(colors)]
+
         # Calculate the constraint line
         if A[i, 1] == 0:  # Vertical line
+            if A[i, 0] == 0:
+                continue  # Skip degenerate constraint
             constraint_x = b[i] / A[i, 0]
-            ax.axvline(x=constraint_x, label=f'Constraint {i + 1}', linestyle='-')
+            ax.axvline(x=constraint_x, color=color, linewidth=2.5,
+                       label=f'Constraint {i + 1}: {A[i, 0]}x₁ + {A[i, 1]}x₂ ≤ {b[i]}')
             # Update mask
             if A[i, 0] > 0:
                 region_mask &= (X <= constraint_x)
             else:
                 region_mask &= (X >= constraint_x)
+        elif A[i, 0] == 0:  # Horizontal line
+            constraint_y = b[i] / A[i, 1]
+            ax.axhline(y=constraint_y, color=color, linewidth=2.5,
+                       label=f'Constraint {i + 1}: {A[i, 0]}x₁ + {A[i, 1]}x₂ ≤ {b[i]}')
+            # Update mask
+            if A[i, 1] > 0:
+                region_mask &= (Y <= constraint_y)
+            else:
+                region_mask &= (Y >= constraint_y)
         else:  # Regular line
-            constraint_y = (b[i] - A[i, 0] * x) / A[i, 1]
-            ax.plot(x, constraint_y, label=f'Constraint {i + 1}')
+            # Generate points for line plot (only within the axis limits)
+            x_line = np.linspace(max(0, x_min), x_max, 1000)
+            y_line = (b[i] - A[i, 0] * x_line) / A[i, 1]
+
+            # Only plot the part of the line within the y limits
+            valid_mask = (y_line >= y_min) & (y_line <= y_max * 1.5)
+            if any(valid_mask):
+                ax.plot(x_line[valid_mask], y_line[valid_mask], color=color, linewidth=2.5,
+                        label=f'Constraint {i + 1}: {A[i, 0]}x₁ + {A[i, 1]}x₂ ≤ {b[i]}')
+
             # Update mask
             if A[i, 1] > 0:
                 region_mask &= (Y <= (b[i] - A[i, 0] * X) / A[i, 1])
             else:
                 region_mask &= (Y >= (b[i] - A[i, 0] * X) / A[i, 1])
 
-    # Add non-negativity constraints
-    region_mask &= (X >= 0) & (Y >= 0)
-    ax.axvline(x=0, color='black', linestyle='-', label='x₁ ≥ 0')
-    ax.axhline(y=0, color='black', linestyle='-', label='x₂ ≥ 0')
-
-    # Shade the feasible region
+    # Shade the feasible region - use the region_mask directly
     ax.imshow(region_mask.T, extent=[x_min, x_max, y_min, y_max], origin='lower',
               alpha=0.3, cmap='Blues', aspect='auto')
 
     # Draw objective function contours
-    Z = c[0] * X + c[1] * Y if c[0] >= 0 and c[1] >= 0 else -c[0] * X - c[1] * Y
-    contour_levels = np.linspace(np.min(Z), np.max(Z), 10)
+    is_min = any(val < 0 for val in c)  # Check if this is a minimization problem
+
+    # For minimization problems (negative coefficients), we need to negate for visualization
+    Z = c[0] * X + c[1] * Y if not is_min else -c[0] * X - c[1] * Y
+
+    # Ensure we get reasonable contour levels
+    z_min, z_max = np.min(Z[region_mask]), np.max(Z[region_mask])
+
+    # If all constraints lie outside the axes, we might not have valid z values
+    if not np.isfinite(z_min) or not np.isfinite(z_max):
+        z_min, z_max = 0, max(abs(c[0]), abs(c[1])) * max(x_max, y_max)
+
+    # Create an array of contour levels between min and max
+    contour_levels = np.linspace(z_min, z_max, 10)
+
+    # Draw the contours
     contours = ax.contour(X, Y, Z, levels=contour_levels, alpha=0.6, cmap='viridis')
     ax.clabel(contours, inline=True, fontsize=8)
 
@@ -275,8 +324,7 @@ def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualizat
                    label=f'Optimal Solution ({solution[0]:.2f}, {solution[1]:.2f})')
 
         # Mark objective value at optimal solution
-        obj_value = -c[0] * solution[0] - c[1] * solution[1] if c[0] < 0 or c[1] < 0 else c[0] * solution[0] + c[1] * \
-                                                                                          solution[1]
+        obj_value = c[0] * solution[0] + c[1] * solution[1] if not is_min else -c[0] * solution[0] - c[1] * solution[1]
         ax.annotate(f'Objective value: {obj_value:.2f}',
                     xy=(solution[0], solution[1]),
                     xytext=(solution[0] + 1, solution[1] + 1),
@@ -466,59 +514,12 @@ def main():
             # Get solution from storage
             solution = st.session_state.solution_storage.decimal_solution
 
-            # Add option to compare with SciPy solution
-            from scipy.optimize import linprog
-
-            col1, col2 = st.columns(2)
-            with col1:
-                show_scipy = st.checkbox("Compare with SciPy solution", value=True)
-
+            # Create and display the visualization
             fig = plot_lp_problem(c, A, b, solution, "LP Problem Visualization")
-
-            # Add SciPy solution for comparison if requested
-            if show_scipy and fig is not None:
-                try:
-                    # Solve with SciPy
-                    result = linprog(c, A_ub=A, b_ub=b, bounds=(0, None), method='highs')
-
-                    if result.success:
-                        scipy_solution = result.x
-
-                        # Add SciPy solution to the plot
-                        ax = fig.gca()
-                        ax.scatter(scipy_solution[0], scipy_solution[1], color='green', s=100, marker='o',
-                                   label=f'SciPy Solution ({scipy_solution[0]:.2f}, {scipy_solution[1]:.2f})')
-
-                        # Add annotation for SciPy solution
-                        obj_value = -c[0] * scipy_solution[0] - c[1] * scipy_solution[1] if c[0] < 0 or c[1] < 0 else c[
-                                                                                                                          0] * \
-                                                                                                                      scipy_solution[
-                                                                                                                          0] + \
-                                                                                                                      c[
-                                                                                                                          1] * \
-                                                                                                                      scipy_solution[
-                                                                                                                          1]
-                        ax.annotate(f'SciPy obj: {obj_value:.2f}',
-                                    xy=(scipy_solution[0], scipy_solution[1]),
-                                    xytext=(scipy_solution[0] - 1, scipy_solution[1] - 1),
-                                    arrowprops=dict(facecolor='green', shrink=0.05, width=1.5))
-
-                        # Update legend
-                        ax.legend(loc='upper right')
-
-                        # Show comparison in text
-                        st.write("**Solution Comparison:**")
-                        st.write(
-                            f"PrimalSimplex: ({solution[0]:.2f}, {solution[1]:.2f}) with objective value {st.session_state.solution_storage.decimal_optimal:.2f}")
-                        st.write(
-                            f"SciPy: ({scipy_solution[0]:.2f}, {scipy_solution[1]:.2f}) with objective value {obj_value:.2f}")
-                except Exception as e:
-                    st.error(f"Error comparing with SciPy: {str(e)}")
 
             # Display the figure
             if fig is not None:
                 st.pyplot(fig)
-
 
 if __name__ == "__main__":
     main()
