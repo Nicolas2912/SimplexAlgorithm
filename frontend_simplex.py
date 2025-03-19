@@ -190,43 +190,91 @@ def display_solution(solver, use_fractions):
 
 def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualization"):
     """
-    Create a visualization of a 2D linear programming problem with improved scaling.
+    Create a robust visualization of a 2D linear programming problem.
+
+    Parameters:
+    -----------
+    c : array-like
+        Coefficients of the objective function (length 2)
+    A : array-like
+        Constraint coefficients matrix
+    b : array-like
+        Right-hand side of constraints
+    solution : array-like, optional
+        The optimal solution to highlight (length 2)
+    title : str, optional
+        Title for the plot
     """
     import numpy as np
     import matplotlib.pyplot as plt
     import matplotlib.patches as patches
 
+    # Ensure we're working with numpy arrays
+    c = np.array(c, dtype=float)
+    A = np.array(A, dtype=float)
+    b = np.array(b, dtype=float)
+
     if len(c) != 2:
-        st.error("Visualization is only available for problems with 2 variables.")
-        return None
+        return None, "Visualization is only available for problems with 2 variables."
 
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 8))
 
-    # Calculate all constraint intersections and vertices
+    # Calculate initial bounds - start with a reasonable default
+    x_min, y_min = 0, 0
+    x_max, y_max = 10, 10
+
+    # Collect all potential vertices of the feasible region
     vertices = []
-    vertices.append((0, 0))  # Origin
 
-    # Find axis intersections
+    # Always include origin if it's feasible
+    origin_feasible = True
     for i in range(len(b)):
-        if A[i, 0] > 0 and b[i] > 0:
+        if A[i, 0] * 0 + A[i, 1] * 0 > b[i] + 1e-10:
+            origin_feasible = False
+            break
+
+    if origin_feasible:
+        vertices.append((0, 0))
+
+    # Find intersections with axes
+    for i in range(len(b)):
+        # x-axis intersection (y=0)
+        if abs(A[i, 0]) > 1e-10:  # Avoid division by zero
             x_intercept = b[i] / A[i, 0]
-            vertices.append((x_intercept, 0))
+            if x_intercept >= 0:
+                y_val = 0
+                # Check if point satisfies all constraints
+                feasible = True
+                for j in range(len(b)):
+                    if A[j, 0] * x_intercept + A[j, 1] * y_val > b[j] + 1e-10:
+                        feasible = False
+                        break
+                if feasible:
+                    vertices.append((x_intercept, 0))
+                    x_max = max(x_max, x_intercept * 1.2)
 
-        if A[i, 1] > 0 and b[i] > 0:
+        # y-axis intersection (x=0)
+        if abs(A[i, 1]) > 1e-10:  # Avoid division by zero
             y_intercept = b[i] / A[i, 1]
-            vertices.append((0, y_intercept))
+            if y_intercept >= 0:
+                x_val = 0
+                # Check if point satisfies all constraints
+                feasible = True
+                for j in range(len(b)):
+                    if A[j, 0] * x_val + A[j, 1] * y_intercept > b[j] + 1e-10:
+                        feasible = False
+                        break
+                if feasible:
+                    vertices.append((0, y_intercept))
+                    y_max = max(y_max, y_intercept * 1.2)
 
-    # Find constraint intersections
+    # Find intersections between constraints
     for i in range(len(b)):
         for j in range(i + 1, len(b)):
-            # Skip constraints with zero coefficients
-            if (A[i, 0] == 0 and A[i, 1] == 0) or (A[j, 0] == 0 and A[j, 1] == 0):
-                continue
-
-            # Solve the system of equations
-            a1, b1 = A[i]
-            a2, b2 = A[j]
+            # Get coefficients
+            a1, b1 = A[i, 0], A[i, 1]
+            a2, b2 = A[j, 0], A[j, 1]
             c1, c2 = b[i], b[j]
 
             # Check if constraints are parallel
@@ -235,58 +283,169 @@ def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualizat
                 continue
 
             # Calculate intersection point
-            x = (c1 * b2 - c2 * b1) / det
-            y = (a1 * c2 - a2 * c1) / det
+            try:
+                x = (c1 * b2 - c2 * b1) / det
+                y = (a1 * c2 - a2 * c1) / det
 
-            # Check if point is in first quadrant
-            if x >= 0 and y >= 0:
-                vertices.append((x, y))
+                # Check if point is in first quadrant
+                if x >= 0 and y >= 0:
+                    # Check if point satisfies all constraints
+                    feasible = True
+                    for k in range(len(b)):
+                        if A[k, 0] * x + A[k, 1] * y > b[k] + 1e-10:
+                            feasible = False
+                            break
 
-    # Add solution point to vertices if provided
+                    if feasible:
+                        vertices.append((x, y))
+                        x_max = max(x_max, x * 1.2)
+                        y_max = max(y_max, y * 1.2)
+            except:
+                # Skip any numerical issues
+                continue
+
+    # If solution is provided, add it to the vertices and update bounds
     if solution is not None:
-        vertices.append((solution[0], solution[1]))
+        x_sol, y_sol = solution[0], solution[1]
+        vertices.append((x_sol, y_sol))
+        x_max = max(x_max, x_sol * 1.2)
+        y_max = max(y_max, y_sol * 1.2)
 
-    # Calculate appropriate bounds based on all vertices and solution
-    if len(vertices) > 0:
-        x_coords = [v[0] for v in vertices]
-        y_coords = [v[1] for v in vertices]
+    # Ensure we have reasonable bounds
+    x_max = max(10, x_max)
+    y_max = max(10, y_max)
 
-        # Filter out any extreme outliers (points more than 3x the median)
-        if len(x_coords) > 3:
-            x_median = np.median([x for x in x_coords if x < float('inf')])
-            y_median = np.median([y for y in y_coords if y < float('inf')])
+    # Draw non-negativity constraints
+    ax.axvline(x=0, color='black', linestyle='-', linewidth=2, label='x₁ ≥ 0')
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=2, label='x₂ ≥ 0')
 
-            # Only filter if we have a reasonable number of points
-            x_coords = [x for x in x_coords if x <= 3 * x_median]
-            y_coords = [y for y in y_coords if y <= 3 * y_median]
+    # Draw constraint lines
+    constraint_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
 
-        # Calculate bounds with padding
-        x_min, x_max = 0, max(x_coords) if x_coords else 10
-        y_min, y_max = 0, max(y_coords) if y_coords else 10
+    for i in range(len(b)):
+        a1, a2 = A[i, 0], A[i, 1]
+        if abs(a1) < 1e-10 and abs(a2) < 1e-10:
+            continue  # Skip degenerate constraints
 
-        # Add padding (more for smaller values, less for larger values)
-        padding_factor = 0.2 if x_max > 100 else 0.4
-        x_padding = x_max * padding_factor
-        y_padding = y_max * padding_factor
+        color = constraint_colors[i % len(constraint_colors)]
+        constraint_text = f"Constraint {i + 1}: "
 
-        x_max += x_padding
-        y_max += y_padding
-    else:
-        # Default bounds if no vertices
-        x_max, y_max = 10, 10
+        if abs(a1) > 1e-10:
+            constraint_text += f"{a1}x₁"
 
-    # Rest of the visualization code continues as before...
-    # [existing drawing code for constraints, feasible region, etc.]
+        if abs(a2) > 1e-10:
+            if a2 > 0 and abs(a1) > 1e-10:
+                constraint_text += f" + {a2}x₂"
+            else:
+                constraint_text += f" {a2}x₂"
 
-    # Set axis limits and labels with the calculated bounds
-    ax.set_xlim(0, x_max)
-    ax.set_ylim(0, y_max)
+        constraint_text += f" ≤ {b[i]}"
 
-    # Add dynamic grid spacing based on the scale
-    if x_max > 1000 or y_max > 1000:
-        ax.xaxis.set_major_locator(plt.MultipleLocator(x_max / y_max))
-        ax.yaxis.set_major_locator(plt.MultipleLocator(y_max / 5))
+        # Calculate points for the line
+        if abs(a1) < 1e-10:  # Horizontal line
+            y_val = b[i] / a2
+            ax.axhline(y=y_val, color=color, linestyle='-', linewidth=1.5, label=constraint_text)
+        elif abs(a2) < 1e-10:  # Vertical line
+            x_val = b[i] / a1
+            ax.axvline(x=x_val, color=color, linestyle='-', linewidth=1.5, label=constraint_text)
+        else:
+            # General line: calculate two points and draw
+            if a2 > 0:  # Line crosses y-axis
+                y_intercept = b[i] / a2
+                points = [(0, y_intercept)]
+            else:
+                points = []
 
+            if a1 > 0:  # Line crosses x-axis
+                x_intercept = b[i] / a1
+                points.append((x_intercept, 0))
+
+            # If we need more points for very skewed lines
+            if len(points) < 2:
+                # Calculate additional point using x_max
+                if abs(a2) > 1e-10:  # Avoid division by zero
+                    y_at_xmax = (b[i] - a1 * x_max) / a2
+                    if y_at_xmax >= 0:
+                        points.append((x_max, y_at_xmax))
+
+                # Calculate additional point using y_max
+                if abs(a1) > 1e-10:  # Avoid division by zero
+                    x_at_ymax = (b[i] - a2 * y_max) / a1
+                    if x_at_ymax >= 0:
+                        points.append((x_at_ymax, y_max))
+
+            # Draw line if we have at least 2 points
+            if len(points) >= 2:
+                sorted_points = sorted(points, key=lambda p: p[0])  # Sort by x-coordinate
+                xs, ys = zip(*sorted_points)
+                ax.plot(xs, ys, color=color, linestyle='-', linewidth=1.5, label=constraint_text)
+
+    # Create the feasible region polygon if we have vertices
+    if len(vertices) >= 3:
+        # Sort vertices to form a convex hull
+        def polar_angle(p):
+            return np.arctan2(p[1] - centroid_y, p[0] - centroid_x)
+
+        centroid_x = sum(v[0] for v in vertices) / len(vertices)
+        centroid_y = sum(v[1] for v in vertices) / len(vertices)
+
+        sorted_vertices = sorted(vertices, key=polar_angle)
+
+        # Create polygon
+        polygon = patches.Polygon(sorted_vertices, closed=True,
+                                  facecolor='lightgray', alpha=0.5, edgecolor='gray')
+        ax.add_patch(polygon)
+
+    # Mark optimal solution if provided
+    if solution is not None:
+        x_sol, y_sol = solution
+        obj_value = c[0] * x_sol + c[1] * y_sol
+
+        ax.scatter(x_sol, y_sol, color='red', s=100, marker='*',
+                   label=f'Optimal Solution ({x_sol:.2f}, {y_sol:.2f})')
+
+        ax.annotate(f'Objective value: {obj_value:.2f}',
+                    xy=(x_sol, y_sol),
+                    xytext=(x_sol + x_max * 0.05, y_sol + y_max * 0.05),
+                    arrowprops=dict(facecolor='black', shrink=0.05, width=1))
+
+    # Draw objective function contours
+    x_grid = np.linspace(0, x_max, 100)
+    y_grid = np.linspace(0, y_max, 100)
+    X, Y = np.meshgrid(x_grid, y_grid)
+    Z = c[0] * X + c[1] * Y
+
+    # For minimization problems with negative coefficients, negate Z for visualization
+    if c[0] < 0 or c[1] < 0:
+        Z = -Z
+
+    # Generate contour levels
+    min_z = np.min(Z)
+    max_z = np.max(Z)
+    levels = np.linspace(min_z, max_z, 6)
+
+    # Draw contours
+    contours = ax.contour(X, Y, Z, levels=levels, alpha=0.7, cmap='viridis')
+    ax.clabel(contours, inline=True, fontsize=8)
+
+    # Set axis limits with a bit of padding
+    padding = 0.05
+    x_range = max(1, x_max - x_min)
+    y_range = max(1, y_max - y_min)
+
+    ax.set_xlim(x_min - padding * x_range, x_max + padding * x_range)
+    ax.set_ylim(y_min - padding * y_range, y_max + padding * y_range)
+
+    # Set labels and title
+    ax.set_xlabel('x₁', fontsize=12)
+    ax.set_ylabel('x₂', fontsize=12)
+    ax.set_title(title, fontsize=14)
+    ax.grid(True, alpha=0.3)
+
+    # Add legend with reasonable size
+    ax.legend(loc='upper right', fontsize=8)
+
+    plt.tight_layout()
     return fig
 
 
