@@ -187,7 +187,7 @@ def display_solution(solver, use_fractions):
 
 def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualization"):
     """
-    Create a visualization of a 2D linear programming problem.
+    Create a visualization of a 2D linear programming problem with proper feasible region.
 
     Parameters:
     -----------
@@ -209,6 +209,8 @@ def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualizat
     """
     import numpy as np
     import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    from matplotlib.path import Path
     import streamlit as st
 
     if len(c) != 2:
@@ -218,112 +220,180 @@ def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualizat
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 8))
 
-    # Set reasonable bounds for the plot based on the problem
-    # Consider both the solution and the constraints
-    max_bound = 20  # Default maximum value
-
+    # Determine appropriate plot bounds
     if solution is not None:
-        max_bound = max(max_bound, solution[0] * 1.5, solution[1] * 1.5)
+        max_x = max(12, solution[0] * 1.5)
+        max_y = max(12, solution[1] * 1.5)
+    else:
+        max_x = max_y = 12
 
-    # Analyze constraints to determine reasonable plot bounds
+    # Extend bounds based on constraints
     for i in range(len(b)):
         if b[i] <= 0:
-            continue  # Skip non-contributing constraints
-
+            continue
         if A[i, 0] > 0:
-            max_bound = max(max_bound, b[i] / A[i, 0] * 1.5)
+            max_x = max(max_x, b[i] / A[i, 0] * 1.5)
         if A[i, 1] > 0:
-            max_bound = max(max_bound, b[i] / A[i, 1] * 1.5)
+            max_y = max(max_y, b[i] / A[i, 1] * 1.5)
 
-    x_min, x_max = 0, max_bound
-    y_min, y_max = 0, max_bound
+    # Ensure reasonable bounds
+    max_x = min(max_x, 30)
+    max_y = min(max_y, 30)
 
-    # Create a grid of points for the feasible region
-    grid_size = 500  # Increase this for a more precise visualization
-    x_grid = np.linspace(x_min, x_max, grid_size)
-    y_grid = np.linspace(y_min, y_max, grid_size)
-    X, Y = np.meshgrid(x_grid, y_grid)
+    # Calculate vertices of the feasible region
+    vertices = []
 
-    # Initialize mask for feasible region (all True initially)
-    region_mask = np.ones_like(X, dtype=bool)
+    # Add the origin
+    vertices.append((0, 0))
 
-    # Apply non-negativity constraints
-    region_mask &= (X >= 0) & (Y >= 0)
-
-    # Apply all the Ax ≤ b constraints
+    # Add intersection of each constraint with x-axis (if positive)
     for i in range(len(b)):
-        a1, a2 = A[i]
-        # For each point in the grid, check if the constraint is satisfied
-        region_mask &= (a1 * X + a2 * Y <= b[i])
+        if A[i, 0] > 0 and b[i] > 0:
+            x_intercept = b[i] / A[i, 0]
+            vertices.append((x_intercept, 0))
 
-    # Draw the constraints
-    constraint_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+    # Add intersection of each constraint with y-axis (if positive)
+    for i in range(len(b)):
+        if A[i, 1] > 0 and b[i] > 0:
+            y_intercept = b[i] / A[i, 1]
+            vertices.append((0, y_intercept))
+
+    # Add intersections between pairs of constraints
+    for i in range(len(b)):
+        for j in range(i + 1, len(b)):
+            # Skip if either constraint has zero coefficients
+            if (A[i, 0] == 0 and A[i, 1] == 0) or (A[j, 0] == 0 and A[j, 1] == 0):
+                continue
+
+            # Solve the system of equations to find intersection
+            # a1*x + b1*y = c1
+            # a2*x + b2*y = c2
+            a1, b1 = A[i]
+            a2, b2 = A[j]
+            c1, c2 = b[i], b[j]
+
+            # Check if lines are parallel
+            det = a1 * b2 - a2 * b1
+            if abs(det) < 1e-10:
+                continue
+
+            # Calculate intersection point
+            x = (c1 * b2 - c2 * b1) / det
+            y = (a1 * c2 - a2 * c1) / det
+
+            # Only add points in the first quadrant
+            if x >= 0 and y >= 0:
+                vertices.append((x, y))
+
+    # Ensure we have unique vertices
+    vertices = list(set(vertices))
+
+    # Check each vertex against all constraints
+    feasible_vertices = []
+    for v in vertices:
+        x, y = v
+        feasible = True
+
+        for i in range(len(b)):
+            if A[i, 0] * x + A[i, 1] * y > b[i] + 1e-10:  # Add small tolerance
+                feasible = False
+                break
+
+        if feasible:
+            feasible_vertices.append(v)
+
+    # Sort vertices to form a convex hull (Graham scan algorithm)
+    if len(feasible_vertices) >= 3:
+        # Find the lowest point
+        lowest = min(feasible_vertices, key=lambda v: (v[1], v[0]))
+
+        # Sort by polar angle
+        def polar_angle(p):
+            return np.arctan2(p[1] - lowest[1], p[0] - lowest[0])
+
+        sorted_vertices = sorted(feasible_vertices, key=polar_angle)
+
+        # Create a polygon for the feasible region
+        polygon = patches.Polygon(sorted_vertices, closed=True,
+                                  facecolor='gray', alpha=0.4, edgecolor=None)
+        ax.add_patch(polygon)
+    elif len(feasible_vertices) > 0:
+        # For 1 or 2 vertices, just plot points
+        x_vals = [v[0] for v in feasible_vertices]
+        y_vals = [v[1] for v in feasible_vertices]
+        ax.scatter(x_vals, y_vals, color='gray', alpha=0.5)
 
     # Draw non-negativity constraints
     ax.axvline(x=0, color='black', linestyle='-', linewidth=2.5, label='x₁ ≥ 0')
     ax.axhline(y=0, color='black', linestyle='-', linewidth=2.5, label='x₂ ≥ 0')
 
     # Draw each constraint
+    constraint_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+
     for i in range(len(b)):
         a1, a2 = A[i]
+        if a1 == 0 and a2 == 0:
+            continue  # Skip degenerate constraints
+
         color = constraint_colors[i % len(constraint_colors)]
 
         if a2 == 0:  # Vertical line
-            if a1 == 0:
-                continue  # Skip degenerate constraint
             x_val = b[i] / a1
-            if 0 <= x_val <= x_max:
+            if 0 <= x_val <= max_x:
                 ax.axvline(x=x_val, color=color, linewidth=2.5,
                            label=f'Constraint {i + 1}: {a1}x₁ {"+" if a2 >= 0 else "-"} {abs(a2)}x₂ ≤ {b[i]}')
         elif a1 == 0:  # Horizontal line
             y_val = b[i] / a2
-            if 0 <= y_val <= y_max:
+            if 0 <= y_val <= max_y:
                 ax.axhline(y=y_val, color=color, linewidth=2.5,
                            label=f'Constraint {i + 1}: {a1}x₁ {"+" if a2 >= 0 else "-"} {abs(a2)}x₂ ≤ {b[i]}')
         else:  # Regular line
             # Generate x and y values for the line
-            x_line = np.linspace(x_min, x_max, 1000)
+            x_line = np.linspace(0, max_x, 1000)
             y_line = (b[i] - a1 * x_line) / a2
 
             # Only plot the line within the bounds of the plot
-            mask = (y_line >= y_min) & (y_line <= y_max) & (x_line >= x_min) & (x_line <= x_max)
+            mask = (y_line >= 0) & (y_line <= max_y)
             if np.any(mask):
                 ax.plot(x_line[mask], y_line[mask], color=color, linewidth=2.5,
                         label=f'Constraint {i + 1}: {a1}x₁ {"+" if a2 >= 0 else "-"} {abs(a2)}x₂ ≤ {b[i]}')
 
-    # Shade the feasible region
-    ax.imshow(region_mask.T, extent=[x_min, x_max, y_min, y_max], origin='lower',
-              alpha=0.4, cmap='Greys', aspect='auto')
+    # Create a fine grid for objective function contours
+    x = np.linspace(0, max_x, 100)
+    y = np.linspace(0, max_y, 100)
+    X, Y = np.meshgrid(x, y)
 
-    # Draw objective function contours
-    is_min = any(val < 0 for val in c)  # Check if this is a minimization problem
+    # Compute objective function values
+    Z = c[0] * X + c[1] * Y
 
-    # For minimization problems (negative coefficients), we negate for visualization
-    Z = c[0] * X + c[1] * Y if not is_min else -c[0] * X - c[1] * Y
+    # For visualization, we want contours to increase toward the optimum
+    if c[0] < 0 or c[1] < 0:  # Minimization with negative coefficients
+        Z_contour = -Z  # Negate for contours only
+    else:
+        Z_contour = Z
 
-    # Get reasonable contour levels from the feasible region
-    Z_feasible = Z[region_mask]
-    if len(Z_feasible) > 0:
-        z_min, z_max = np.min(Z_feasible), np.max(Z_feasible)
-        contour_levels = np.linspace(z_min, z_max, 8)
-        contours = ax.contour(X, Y, Z, levels=contour_levels, alpha=0.7, cmap='viridis')
-        ax.clabel(contours, inline=True, fontsize=9, fmt='%.1f')
+    # Draw contours
+    levels = np.linspace(np.min(Z_contour), np.max(Z_contour), 8)
+    contours = ax.contour(X, Y, Z_contour, levels=levels, alpha=0.7, cmap='viridis')
+    ax.clabel(contours, inline=True, fontsize=9, fmt='%.1f')
 
     # Mark the optimal solution if provided
     if solution is not None:
         ax.scatter(solution[0], solution[1], color='red', s=150, marker='*',
                    label=f'Optimal Solution ({solution[0]:.2f}, {solution[1]:.2f})')
 
-        # Mark objective value at optimal solution
-        obj_value = c[0] * solution[0] + c[1] * solution[1] if not is_min else -c[0] * solution[0] - c[1] * solution[1]
-        ax.annotate(f'Objective value: {obj_value:.2f}',
+        # Calculate the true objective value
+        true_obj_value = c[0] * solution[0] + c[1] * solution[1]
+
+        # Annotate with the correct objective value
+        ax.annotate(f'Objective value: {true_obj_value:.2f}',
                     xy=(solution[0], solution[1]),
-                    xytext=(solution[0] + max_bound * 0.05, solution[1] + max_bound * 0.05),
+                    xytext=(solution[0] + max_x * 0.05, solution[1] + max_y * 0.05),
                     arrowprops=dict(facecolor='black', shrink=0.05, width=1.5))
 
     # Set labels and title
-    ax.set_xlim(x_min, x_max)
-    ax.set_ylim(y_min, y_max)
+    ax.set_xlim(0, max_x)
+    ax.set_ylim(0, max_y)
     ax.set_xlabel('x₁', fontsize=12)
     ax.set_ylabel('x₂', fontsize=12)
     ax.set_title(title, fontsize=14)
