@@ -29,7 +29,6 @@ class PrimalSimplex:
 
         self.phase = 1 if eq_constraints else 2  # Track which phase we're in
 
-
     def _check_negative_rhs(self):
         """
         Check if any of the constraints have negative RHS values.
@@ -135,8 +134,18 @@ class PrimalSimplex:
         """
         Find the entering variable (pivot column) by choosing the most negative coefficient.
         """
-        min_idx = np.argmin(self.tableau[0, :self.n])
-        return min_idx if self.tableau[0, min_idx] < -1e-10 else None
+        # Get the objective row coefficients for the original variables
+        obj_coeffs = self.tableau[0, :-1]
+
+        # Find all negative coefficients
+        neg_indices = np.where(obj_coeffs < -1e-10)[0]
+
+        if len(neg_indices) == 0:
+            return None  # No negative coefficients, we're optimal
+
+        # Find the most negative coefficient
+        most_neg_idx = neg_indices[np.argmin(obj_coeffs[neg_indices])]
+        return most_neg_idx
 
     def _find_pivot_row(self, pivot_col):
         """
@@ -384,6 +393,7 @@ class PrimalSimplex:
             optimal_value = -self.tableau[0, -1]
         return solution, optimal_value
 
+
 def solve_lp_scipy(c, A, b):
     """
     Solve a linear programming problem using SciPy's linprog function:
@@ -398,7 +408,7 @@ def solve_lp_scipy(c, A, b):
     # Solve the LP problem
     A = np.array(A, dtype=float)
     b = np.array(b, dtype=float)
-    result = linprog(c, A_eq=A, b_eq=b, bounds=(0, None), method='highs')
+    result = linprog(c, A_ub=A, b_ub=b, bounds=(0, None), method='highs')
 
     # Check if the solution is successful
     if result.success:
@@ -498,8 +508,12 @@ if __name__ == "__main__":
             "c": np.array([2, 3]),
             "A": np.array([[1, 2], [2, 1], [1, 1]]),
             "b": np.array([10, 8, 5])
+        },
+        {
+            "c": np.array([-3, -2]),
+            "A": np.array([[2, 1], [2, 3], [3, 1]]),
+            "b": np.array([18, 42, 24])
         }
-
     ]
 
     for i, problem in enumerate(problems):
@@ -512,7 +526,7 @@ if __name__ == "__main__":
         try:
             # Solve using Dual Simplex
             primal_simp = PrimalSimplex(c_simplex, A_simplex, b_simplex, use_fractions=False, fraction_digits=3,
-                                        eq_constraints=True)
+                                        eq_constraints=False)
             solution_ds, optimal_value_ds = primal_simp.solve()
             print("Primal Simplex Solution:", solution_ds)
             print("Primal Simplex Optimal Value:", optimal_value_ds)
