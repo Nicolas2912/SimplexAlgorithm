@@ -209,6 +209,7 @@ def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualizat
     """
     import numpy as np
     import matplotlib.pyplot as plt
+    import streamlit as st
 
     if len(c) != 2:
         st.error("Visualization is only available for problems with 2 variables.")
@@ -217,127 +218,117 @@ def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualizat
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 8))
 
-    # Set reasonable bounds for the plot
-    max_coeff = max(np.max(np.abs(A)), 1)
-    max_rhs = max(np.max(np.abs(b)), 1)
-    max_range = max(20, 2 * max_rhs / max_coeff)
+    # Set reasonable bounds for the plot based on the problem
+    # Consider both the solution and the constraints
+    max_bound = 20  # Default maximum value
 
-    x_min, x_max = -1, max_range
-    y_min, y_max = -1, max_range
-
-    # Extend bounds if needed to include important points
     if solution is not None:
-        x_max = max(x_max, solution[0] * 1.2 + 1)
-        y_max = max(y_max, solution[1] * 1.2 + 1)
+        max_bound = max(max_bound, solution[0] * 1.5, solution[1] * 1.5)
 
-    # Create a grid of points
-    x = np.linspace(x_min, x_max, 1000)
-    y = np.linspace(y_min, y_max, 1000)
-    X, Y = np.meshgrid(x, y)
+    # Analyze constraints to determine reasonable plot bounds
+    for i in range(len(b)):
+        if b[i] <= 0:
+            continue  # Skip non-contributing constraints
 
-    # Initialize mask for feasible region
+        if A[i, 0] > 0:
+            max_bound = max(max_bound, b[i] / A[i, 0] * 1.5)
+        if A[i, 1] > 0:
+            max_bound = max(max_bound, b[i] / A[i, 1] * 1.5)
+
+    x_min, x_max = 0, max_bound
+    y_min, y_max = 0, max_bound
+
+    # Create a grid of points for the feasible region
+    grid_size = 500  # Increase this for a more precise visualization
+    x_grid = np.linspace(x_min, x_max, grid_size)
+    y_grid = np.linspace(y_min, y_max, grid_size)
+    X, Y = np.meshgrid(x_grid, y_grid)
+
+    # Initialize mask for feasible region (all True initially)
     region_mask = np.ones_like(X, dtype=bool)
 
-    # Add non-negativity constraints to mask
+    # Apply non-negativity constraints
     region_mask &= (X >= 0) & (Y >= 0)
 
-    # Draw non-negativity constraints
-    ax.axvline(x=0, color='black', linestyle='-', linewidth=2, label='x₁ ≥ 0')
-    ax.axhline(y=0, color='black', linestyle='-', linewidth=2, label='x₂ ≥ 0')
-
-    # Define colors for constraints
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22',
-              '#17becf']
-
-    # Plot each constraint line
+    # Apply all the Ax ≤ b constraints
     for i in range(len(b)):
-        if A[i, 0] == 0 and A[i, 1] == 0:
-            continue  # Skip constraints with zero coefficients
+        a1, a2 = A[i]
+        # For each point in the grid, check if the constraint is satisfied
+        region_mask &= (a1 * X + a2 * Y <= b[i])
 
-        color = colors[i % len(colors)]
+    # Draw the constraints
+    constraint_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
 
-        # Calculate the constraint line
-        if A[i, 1] == 0:  # Vertical line
-            if A[i, 0] == 0:
+    # Draw non-negativity constraints
+    ax.axvline(x=0, color='black', linestyle='-', linewidth=2.5, label='x₁ ≥ 0')
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=2.5, label='x₂ ≥ 0')
+
+    # Draw each constraint
+    for i in range(len(b)):
+        a1, a2 = A[i]
+        color = constraint_colors[i % len(constraint_colors)]
+
+        if a2 == 0:  # Vertical line
+            if a1 == 0:
                 continue  # Skip degenerate constraint
-            constraint_x = b[i] / A[i, 0]
-            ax.axvline(x=constraint_x, color=color, linewidth=2.5,
-                       label=f'Constraint {i + 1}: {A[i, 0]}x₁ + {A[i, 1]}x₂ ≤ {b[i]}')
-            # Update mask
-            if A[i, 0] > 0:
-                region_mask &= (X <= constraint_x)
-            else:
-                region_mask &= (X >= constraint_x)
-        elif A[i, 0] == 0:  # Horizontal line
-            constraint_y = b[i] / A[i, 1]
-            ax.axhline(y=constraint_y, color=color, linewidth=2.5,
-                       label=f'Constraint {i + 1}: {A[i, 0]}x₁ + {A[i, 1]}x₂ ≤ {b[i]}')
-            # Update mask
-            if A[i, 1] > 0:
-                region_mask &= (Y <= constraint_y)
-            else:
-                region_mask &= (Y >= constraint_y)
+            x_val = b[i] / a1
+            if 0 <= x_val <= x_max:
+                ax.axvline(x=x_val, color=color, linewidth=2.5,
+                           label=f'Constraint {i + 1}: {a1}x₁ {"+" if a2 >= 0 else "-"} {abs(a2)}x₂ ≤ {b[i]}')
+        elif a1 == 0:  # Horizontal line
+            y_val = b[i] / a2
+            if 0 <= y_val <= y_max:
+                ax.axhline(y=y_val, color=color, linewidth=2.5,
+                           label=f'Constraint {i + 1}: {a1}x₁ {"+" if a2 >= 0 else "-"} {abs(a2)}x₂ ≤ {b[i]}')
         else:  # Regular line
-            # Generate points for line plot (only within the axis limits)
-            x_line = np.linspace(max(0, x_min), x_max, 1000)
-            y_line = (b[i] - A[i, 0] * x_line) / A[i, 1]
+            # Generate x and y values for the line
+            x_line = np.linspace(x_min, x_max, 1000)
+            y_line = (b[i] - a1 * x_line) / a2
 
-            # Only plot the part of the line within the y limits
-            valid_mask = (y_line >= y_min) & (y_line <= y_max * 1.5)
-            if any(valid_mask):
-                ax.plot(x_line[valid_mask], y_line[valid_mask], color=color, linewidth=2.5,
-                        label=f'Constraint {i + 1}: {A[i, 0]}x₁ + {A[i, 1]}x₂ ≤ {b[i]}')
+            # Only plot the line within the bounds of the plot
+            mask = (y_line >= y_min) & (y_line <= y_max) & (x_line >= x_min) & (x_line <= x_max)
+            if np.any(mask):
+                ax.plot(x_line[mask], y_line[mask], color=color, linewidth=2.5,
+                        label=f'Constraint {i + 1}: {a1}x₁ {"+" if a2 >= 0 else "-"} {abs(a2)}x₂ ≤ {b[i]}')
 
-            # Update mask
-            if A[i, 1] > 0:
-                region_mask &= (Y <= (b[i] - A[i, 0] * X) / A[i, 1])
-            else:
-                region_mask &= (Y >= (b[i] - A[i, 0] * X) / A[i, 1])
-
-    # Shade the feasible region - use the region_mask directly
+    # Shade the feasible region
     ax.imshow(region_mask.T, extent=[x_min, x_max, y_min, y_max], origin='lower',
-              alpha=0.3, cmap='Blues', aspect='auto')
+              alpha=0.4, cmap='Greys', aspect='auto')
 
     # Draw objective function contours
     is_min = any(val < 0 for val in c)  # Check if this is a minimization problem
 
-    # For minimization problems (negative coefficients), we need to negate for visualization
+    # For minimization problems (negative coefficients), we negate for visualization
     Z = c[0] * X + c[1] * Y if not is_min else -c[0] * X - c[1] * Y
 
-    # Ensure we get reasonable contour levels
-    z_min, z_max = np.min(Z[region_mask]), np.max(Z[region_mask])
-
-    # If all constraints lie outside the axes, we might not have valid z values
-    if not np.isfinite(z_min) or not np.isfinite(z_max):
-        z_min, z_max = 0, max(abs(c[0]), abs(c[1])) * max(x_max, y_max)
-
-    # Create an array of contour levels between min and max
-    contour_levels = np.linspace(z_min, z_max, 10)
-
-    # Draw the contours
-    contours = ax.contour(X, Y, Z, levels=contour_levels, alpha=0.6, cmap='viridis')
-    ax.clabel(contours, inline=True, fontsize=8)
+    # Get reasonable contour levels from the feasible region
+    Z_feasible = Z[region_mask]
+    if len(Z_feasible) > 0:
+        z_min, z_max = np.min(Z_feasible), np.max(Z_feasible)
+        contour_levels = np.linspace(z_min, z_max, 8)
+        contours = ax.contour(X, Y, Z, levels=contour_levels, alpha=0.7, cmap='viridis')
+        ax.clabel(contours, inline=True, fontsize=9, fmt='%.1f')
 
     # Mark the optimal solution if provided
     if solution is not None:
-        ax.scatter(solution[0], solution[1], color='red', s=100, marker='*',
+        ax.scatter(solution[0], solution[1], color='red', s=150, marker='*',
                    label=f'Optimal Solution ({solution[0]:.2f}, {solution[1]:.2f})')
 
         # Mark objective value at optimal solution
         obj_value = c[0] * solution[0] + c[1] * solution[1] if not is_min else -c[0] * solution[0] - c[1] * solution[1]
         ax.annotate(f'Objective value: {obj_value:.2f}',
                     xy=(solution[0], solution[1]),
-                    xytext=(solution[0] + 1, solution[1] + 1),
+                    xytext=(solution[0] + max_bound * 0.05, solution[1] + max_bound * 0.05),
                     arrowprops=dict(facecolor='black', shrink=0.05, width=1.5))
 
     # Set labels and title
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    ax.set_xlabel('x₁')
-    ax.set_ylabel('x₂')
-    ax.set_title(title)
+    ax.set_xlabel('x₁', fontsize=12)
+    ax.set_ylabel('x₂', fontsize=12)
+    ax.set_title(title, fontsize=14)
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper right')
+    ax.legend(loc='upper right', fontsize=10)
 
     plt.tight_layout()
     return fig
