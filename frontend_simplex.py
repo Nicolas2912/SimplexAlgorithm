@@ -1,5 +1,6 @@
 import streamlit as st
 import numpy as np
+import matplotlib.pyplot as plt
 from fractions import Fraction
 from tabulate import tabulate
 from simplex import PrimalSimplex  # Assuming the class is in primal_simplex.py
@@ -13,6 +14,7 @@ class SolutionStorage:
         # self.fraction_solution = fraction_solution
         # self.fraction_optimal = fraction_optimal
 
+
 def convert_to_fraction(value, solver, fraction_digits):
     """Convert a decimal value to a fraction string with given digit limit"""
     frac = solver._limit_fraction(Fraction(float(value)))
@@ -23,6 +25,7 @@ def convert_to_fraction(value, solver, fraction_digits):
     if abs(num) > max_value or den > max_value:
         return f"{float(value):.{fraction_digits}f}"
     return str(frac)
+
 
 def create_example_problem():
     """Create a simple example LP problem"""
@@ -69,6 +72,7 @@ def display_matrix(matrix, name):
     """Display a matrix/vector in a more readable format"""
     st.write(f"{name}:")
     st.write(matrix)
+
 
 def validate_inputs(c, A, b):
     """Validate input dimensions and values"""
@@ -181,6 +185,116 @@ def display_solution(solver, use_fractions):
     st.latex(solution_latex)
 
 
+def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualization"):
+    """
+    Create a visualization of a 2D linear programming problem.
+
+    Parameters:
+    -----------
+    c : array-like
+        Coefficients of the objective function (length 2)
+    A : array-like
+        Constraint coefficients matrix
+    b : array-like
+        Right-hand side of constraints
+    solution : array-like, optional
+        The optimal solution to highlight (length 2)
+    title : str, optional
+        Title for the plot
+
+    Returns:
+    --------
+    fig : matplotlib.figure.Figure
+        The matplotlib figure containing the visualization
+    """
+    if len(c) != 2:
+        st.error("Visualization is only available for problems with 2 variables.")
+        return None
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Set reasonable bounds for the plot
+    x_min, x_max = -1, max(20, solution[0] * 1.5 if solution is not None else 20)
+    y_min, y_max = -1, max(20, solution[1] * 1.5 if solution is not None else 20)
+
+    # Extend bounds if needed to include important points
+    if solution is not None:
+        x_max = max(x_max, solution[0] * 1.2 + 1)
+        y_max = max(y_max, solution[1] * 1.2 + 1)
+
+    # Create a grid of points
+    x = np.linspace(x_min, x_max, 1000)
+    y = np.linspace(y_min, y_max, 1000)
+    X, Y = np.meshgrid(x, y)
+
+    # Plot and shade the feasible region
+    region_mask = np.ones_like(X, dtype=bool)
+
+    # Plot each constraint line
+    for i in range(len(b)):
+        if A[i, 0] == 0 and A[i, 1] == 0:
+            continue  # Skip constraints with zero coefficients
+
+        # Calculate the constraint line
+        if A[i, 1] == 0:  # Vertical line
+            constraint_x = b[i] / A[i, 0]
+            ax.axvline(x=constraint_x, label=f'Constraint {i + 1}', linestyle='-')
+            # Update mask
+            if A[i, 0] > 0:
+                region_mask &= (X <= constraint_x)
+            else:
+                region_mask &= (X >= constraint_x)
+        else:  # Regular line
+            constraint_y = (b[i] - A[i, 0] * x) / A[i, 1]
+            ax.plot(x, constraint_y, label=f'Constraint {i + 1}')
+            # Update mask
+            if A[i, 1] > 0:
+                region_mask &= (Y <= (b[i] - A[i, 0] * X) / A[i, 1])
+            else:
+                region_mask &= (Y >= (b[i] - A[i, 0] * X) / A[i, 1])
+
+    # Add non-negativity constraints
+    region_mask &= (X >= 0) & (Y >= 0)
+    ax.axvline(x=0, color='black', linestyle='-', label='x₁ ≥ 0')
+    ax.axhline(y=0, color='black', linestyle='-', label='x₂ ≥ 0')
+
+    # Shade the feasible region
+    ax.imshow(region_mask.T, extent=[x_min, x_max, y_min, y_max], origin='lower',
+              alpha=0.3, cmap='Blues', aspect='auto')
+
+    # Draw objective function contours
+    Z = c[0] * X + c[1] * Y if c[0] >= 0 and c[1] >= 0 else -c[0] * X - c[1] * Y
+    contour_levels = np.linspace(np.min(Z), np.max(Z), 10)
+    contours = ax.contour(X, Y, Z, levels=contour_levels, alpha=0.6, cmap='viridis')
+    ax.clabel(contours, inline=True, fontsize=8)
+
+    # Mark the optimal solution if provided
+    if solution is not None:
+        ax.scatter(solution[0], solution[1], color='red', s=100, marker='*',
+                   label=f'Optimal Solution ({solution[0]:.2f}, {solution[1]:.2f})')
+
+        # Mark objective value at optimal solution
+        obj_value = -c[0] * solution[0] - c[1] * solution[1] if c[0] < 0 or c[1] < 0 else c[0] * solution[0] + c[1] * \
+                                                                                          solution[1]
+        ax.annotate(f'Objective value: {obj_value:.2f}',
+                    xy=(solution[0], solution[1]),
+                    xytext=(solution[0] + 1, solution[1] + 1),
+                    arrowprops=dict(facecolor='black', shrink=0.05, width=1.5))
+
+    # Set labels and title
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_xlabel('x₁')
+    ax.set_ylabel('x₂')
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right')
+
+    plt.tight_layout()
+    return fig
+
+
 def main():
     # Initialize session state variables if they don't exist
     if 'solution_storage' not in st.session_state:
@@ -256,6 +370,10 @@ def main():
         key='fraction_digits'
     )
 
+    # Add option to use equality constraints
+    eq_constraints = st.sidebar.checkbox("Use equality constraints (=) instead of inequalities (≤)",
+                                         value=False, key='eq_constraints')
+
     # Validate inputs
     valid, message = validate_inputs(c, A, b)
     if not valid:
@@ -272,10 +390,11 @@ def main():
         # Clear previous tableaus when solving new problem
         st.session_state.tableaus = []
 
-        st.header("Status")
+        st.header("Solution Process")
         try:
             # Create solver instance with fractions
-            solver = PrimalSimplex(c, A, b, use_fractions=True, fraction_digits=fraction_digits)
+            solver = PrimalSimplex(c, A, b, use_fractions=True, fraction_digits=fraction_digits,
+                                   eq_constraints=eq_constraints)
 
             # Store initial tableau (no pivot info for first tableau)
             iteration = 0
@@ -326,13 +445,79 @@ def main():
     # Display solution progress if available
     if st.session_state.has_solved and st.session_state.tableaus:
         st.success("Optimal solution found!")
-        st.markdown("### Solution Progress")
-        for iteration, tableau, solver, pivot_info in st.session_state.tableaus:
-            display_iteration(iteration, tableau, solver, use_fractions, fraction_digits, pivot_info)
+
+        # Option to show solution progress
+        show_progress = st.checkbox("Show solution progress", value=True)
+
+        if show_progress:
+            st.markdown("### Solution Progress")
+            for iteration, tableau, solver, pivot_info in st.session_state.tableaus:
+                display_iteration(iteration, tableau, solver, use_fractions, fraction_digits, pivot_info)
 
     # Display final solution if available
     if st.session_state.solution_storage is not None:
+        st.header("Optimal Solution")
         display_solution(solver, use_fractions)
+
+        # Add visualization for 2D problems
+        if len(c) == 2:
+            st.header("Problem Visualization")
+
+            # Get solution from storage
+            solution = st.session_state.solution_storage.decimal_solution
+
+            # Add option to compare with SciPy solution
+            from scipy.optimize import linprog
+
+            col1, col2 = st.columns(2)
+            with col1:
+                show_scipy = st.checkbox("Compare with SciPy solution", value=True)
+
+            fig = plot_lp_problem(c, A, b, solution, "LP Problem Visualization")
+
+            # Add SciPy solution for comparison if requested
+            if show_scipy and fig is not None:
+                try:
+                    # Solve with SciPy
+                    result = linprog(c, A_ub=A, b_ub=b, bounds=(0, None), method='highs')
+
+                    if result.success:
+                        scipy_solution = result.x
+
+                        # Add SciPy solution to the plot
+                        ax = fig.gca()
+                        ax.scatter(scipy_solution[0], scipy_solution[1], color='green', s=100, marker='o',
+                                   label=f'SciPy Solution ({scipy_solution[0]:.2f}, {scipy_solution[1]:.2f})')
+
+                        # Add annotation for SciPy solution
+                        obj_value = -c[0] * scipy_solution[0] - c[1] * scipy_solution[1] if c[0] < 0 or c[1] < 0 else c[
+                                                                                                                          0] * \
+                                                                                                                      scipy_solution[
+                                                                                                                          0] + \
+                                                                                                                      c[
+                                                                                                                          1] * \
+                                                                                                                      scipy_solution[
+                                                                                                                          1]
+                        ax.annotate(f'SciPy obj: {obj_value:.2f}',
+                                    xy=(scipy_solution[0], scipy_solution[1]),
+                                    xytext=(scipy_solution[0] - 1, scipy_solution[1] - 1),
+                                    arrowprops=dict(facecolor='green', shrink=0.05, width=1.5))
+
+                        # Update legend
+                        ax.legend(loc='upper right')
+
+                        # Show comparison in text
+                        st.write("**Solution Comparison:**")
+                        st.write(
+                            f"PrimalSimplex: ({solution[0]:.2f}, {solution[1]:.2f}) with objective value {st.session_state.solution_storage.decimal_optimal:.2f}")
+                        st.write(
+                            f"SciPy: ({scipy_solution[0]:.2f}, {scipy_solution[1]:.2f}) with objective value {obj_value:.2f}")
+                except Exception as e:
+                    st.error(f"Error comparing with SciPy: {str(e)}")
+
+            # Display the figure
+            if fig is not None:
+                st.pyplot(fig)
 
 
 if __name__ == "__main__":
