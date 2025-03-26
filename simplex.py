@@ -668,17 +668,29 @@ class SensitivityAnalysis:
 
     def _get_optimal_solution(self):
         """Extract the optimal solution and objective value."""
-        # Use the already computed solution from solver
-        final_solution, final_obj_val = self.solver.solve() # Re-run solve to get consistent final state? No, use stored.
+        if not hasattr(self.solver, 'tableau') or self.solver.tableau is None:
+             raise ValueError("Solver tableau is not available in _get_optimal_solution.")
 
-        # Extract from the final tableau stored in self.solver
-        obj_value = self.solver.tableau[0, -1] # Assuming minimization original
+        # Optimal objective value from the tableau (negated for original Min problem)
+        obj_value = -self.solver.tableau[0, -1]
 
+        # Optimal solution vector
         solution = np.zeros(self.solver.n)
-        basic_vars_info = self.solver._get_basic_variables()
-        for col_idx, row_idx in basic_vars_info:
-             if col_idx < self.solver.n:
-                  solution[col_idx] = max(0.0, self.solver.tableau[row_idx, -1])
+        try:
+            basic_vars_info = self.solver._get_basic_variables()
+            for col_idx, row_idx in basic_vars_info:
+                if col_idx < self.solver.n: # Is it an original variable?
+                    # Ensure value is float and non-negative
+                    try:
+                       val = float(self.solver.tableau[row_idx, -1])
+                       solution[col_idx] = max(0.0, val)
+                    except (TypeError, ValueError):
+                       solution[col_idx] = 0.0 # Default to 0 if conversion fails
+        except Exception as e:
+             # Handle cases where basis extraction might fail unexpectedly
+             print(f"Warning: Error extracting basic variables in SensitivityAnalysis: {e}")
+             solution.fill(np.nan) # Indicate solution couldn't be extracted reliably
+
 
         return obj_value, solution
 
