@@ -31,15 +31,6 @@ A comprehensive implementation of Linear Programming algorithms, featuring both 
   - LaTeX formatting for mathematical expressions
   - Intuitive input methods for problem specification
 
-## Requirements
-
-Create a conda environment and install the required packages:
-
-```powershell
-conda create -n lp-solver python=3.9
-conda activate lp-solver
-pip install -r requirements.txt
-```
 
 ## Project Structure
 
@@ -67,7 +58,7 @@ cd linear-programming-solver
 
 2. Create and activate a conda environment:
 ```powershell
-conda create -n lp-solver python=3.9
+conda create -n lp-solver python=3.12
 conda activate lp-solver
 ```
 
