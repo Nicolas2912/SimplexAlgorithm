@@ -52,7 +52,7 @@ linear-programming-solver/
 
 1. Clone the repository:
 ```powershell
-git clone https://github.com/yourusername/linear-programming-solver.git
+git clone https://github.com/nicolas2912/linear-programming-solver.git
 cd linear-programming-solver
 ```
 
