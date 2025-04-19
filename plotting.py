@@ -67,7 +67,7 @@ def plot_lp_problem_2d(c, A, b, solution=None, path_vertices=None, title="LP Fea
         if plot_max_x - plot_min_x < 1: plot_max_x = plot_min_x + 1
         if plot_max_y - plot_min_y < 1: plot_max_y = plot_min_y + 1
 
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(7, 4))
         x_grid = np.linspace(plot_min_x, plot_max_x, 400)
         y_grid = np.linspace(plot_min_y, plot_max_y, 400)
         X, Y = np.meshgrid(x_grid, y_grid)
@@ -118,9 +118,17 @@ def plot_lp_problem_2d(c, A, b, solution=None, path_vertices=None, title="LP Fea
                  if grad_norm > 1e-9:
                      dx = -c_2d[0] / grad_norm * arrow_len
                      dy = -c_2d[1] / grad_norm * arrow_len
-                     ax.arrow(mid_x, mid_y, dx, dy, head_width=arrow_len/2.5, head_length=arrow_len/2, fc='black', ec='black', label='Improvement Dir.')
+                     arrow_start_x = mid_x
+                     arrow_start_y = mid_y
+                     in_bounds_start = (plot_min_x <= arrow_start_x <= plot_max_x) and (plot_min_y <= arrow_start_y <= plot_max_y)
+                     in_bounds_end = (plot_min_x <= (arrow_start_x + dx) <= plot_max_x) and (plot_min_y <= (arrow_start_y + dy) <= plot_max_y)
+                     # Only plot if endpoints are somewhat reasonable
+                     if in_bounds_start or in_bounds_end:
+                          ax.arrow(arrow_start_x, arrow_start_y, dx, dy,
+                                 head_width=arrow_len * 0.3, head_length=arrow_len * 0.5,
+                                 fc='black', ec='black', zorder=5)
 
-        # --- Simplex Path ---
+        # --- Plot Solution and Path ---
         if path_vertices:
             path_x = [v[0] for v in path_vertices if len(v)>=2]
             path_y = [v[1] for v in path_vertices if len(v)>=2]
@@ -137,6 +145,11 @@ def plot_lp_problem_2d(c, A, b, solution=None, path_vertices=None, title="LP Fea
             else: # Indicate if outside view
                  ax.text(0.98, 0.02, f'Optimal outside view\n({sol_x:.3g}, {sol_y:.3g})',
                          ha='right', va='bottom', transform=ax.transAxes, fontsize=8, color='red', style='italic')
+
+        # --- Add proxy plot for the arrow legend ---
+        # This plots nothing visible but provides the correct legend entry
+        if not np.all(np.isclose(c_2d, 0)) and grad_norm > 1e-9:
+             ax.plot([], [], color='black', linewidth=1.5, label='Improvement Direction')
 
         # --- Plot Configuration ---
         ax.set_xlim(plot_min_x, plot_max_x)
@@ -161,15 +174,13 @@ def plot_lp_problem_2d(c, A, b, solution=None, path_vertices=None, title="LP Fea
         # --- Legend Handling ---
         handles, labels = ax.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
-        # Decide legend position based on number of items
-        if len(by_label) > 6: # Threshold for moving legend outside
-            ax.legend(by_label.values(), by_label.keys(), loc='center left', bbox_to_anchor=(1.01, 0.5), fontsize='small')
-            plt.tight_layout(rect=[0, 0, 0.85, 1]) # Adjust layout if legend is outside
-        else:
-            ax.legend(by_label.values(), by_label.keys(), loc='best', fontsize='small')
-            plt.tight_layout()
+        # Place legend below plot, centered, horizontal arrangement
+        ax.legend(by_label.values(), by_label.keys(), loc='upper center', bbox_to_anchor=(0.5, -0.15),
+                  fontsize=8, ncol=3, frameon=False) # frameon=False for cleaner look below plot
 
-        return fig, None
+        plt.subplots_adjust(bottom=0.25) # Make space below the plot for the legend
+
+        return fig, None # Return figure
 
     except Exception as e:
         import traceback
