@@ -253,7 +253,7 @@ def main():
             # Note: The 'Infeasible' case might need more robust checking depending on simplex.py impl.
 
             else: # Cycle or other issue
-                 solve_placeholder.warning(f"Solver finished with status: {status}")
+                 solve_placeholder.warning("Solver finished but did not reach optimal solution.")
                  st.session_state.has_solved = False
                  st.session_state.solver = solver
 
