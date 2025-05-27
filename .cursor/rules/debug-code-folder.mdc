@@ -1,0 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+When creating new files for debugging, name the files always by starting with "debug_" followed by a short and descriptive name that reflects the actual content of the file.
+
+Always add those files to the folder "debug". When this folder does not exists, create this folder.

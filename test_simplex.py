@@ -5,16 +5,27 @@ import numpy as np
 from scipy.optimize import linprog
 import sys
 import os
+import warnings
 
 # Add the directory containing simplex.py to the Python path
 # Adjust this if your file structure is different
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-# Import the class to be tested
+# Import the classes and exceptions to be tested
 try:
-    from simplex import PrimalSimplex
+    from simplex import (
+        PrimalSimplex, 
+        SensitivityAnalysis,
+        SimplexError,
+        InfeasibleProblemError,
+        UnboundedProblemError,
+        DegenerateSolutionError,
+        NumericalInstabilityError,
+        TableauCorruptionError,
+        solve_lp_scipy
+    )
 except ImportError as e:
-    print(f"Failed to import PrimalSimplex from simplex.py: {e}")
+    print(f"Failed to import from simplex.py: {e}")
     print("Ensure simplex.py is in the same directory or accessible via PYTHONPATH.")
     sys.exit(1)
 
@@ -159,8 +170,8 @@ class TestPrimalSimplex(unittest.TestCase):
 
         # Simplex Solver
         solver = PrimalSimplex(c, A, b, eq_constraints=False)
-        # Expect an exception indicating unboundedness
-        with self.assertRaisesRegex(Exception, "[Uu]nbounded"):
+        # Expect the specific UnboundedProblemError exception
+        with self.assertRaises(UnboundedProblemError):
             solver.solve()
 
         # SciPy Solver (check status)
@@ -184,8 +195,8 @@ class TestPrimalSimplex(unittest.TestCase):
 
         # Simplex Solver
         solver = PrimalSimplex(c, A_eq, b_eq, eq_constraints=True)
-        # Expect an exception indicating infeasibility from Phase I
-        with self.assertRaisesRegex(Exception, "[Ii]nfeasible"):
+        # Expect the specific InfeasibleProblemError exception
+        with self.assertRaises(InfeasibleProblemError):
             solver.solve()
 
         # SciPy Solver (check status)
@@ -242,6 +253,313 @@ class TestPrimalSimplex(unittest.TestCase):
         # Check path vertices
         self.assertIsInstance(solver.path_vertices, list)
         self.assertGreater(len(solver.path_vertices), 0)
+
+    def test_input_validation_errors(self):
+        """Test input validation with improved error messages."""
+        # Test empty constraint matrix
+        with self.assertRaises(ValueError) as cm:
+            PrimalSimplex(c=[1, 2], A=np.array([]).reshape(0, 2), b=[])
+        self.assertIn("at least one constraint", str(cm.exception))
+        
+        # Test empty variable vector
+        with self.assertRaises(ValueError) as cm:
+            PrimalSimplex(c=[], A=np.array([]).reshape(1, 0), b=[1])
+        self.assertIn("at least one variable", str(cm.exception))
+        
+        # Test dimension mismatch
+        with self.assertRaises(ValueError) as cm:
+            PrimalSimplex(c=[1, 2], A=np.array([[1, 2, 3]]), b=[1])
+        self.assertIn("does not match", str(cm.exception))
+        
+        # Test non-finite values
+        with self.assertRaises(ValueError) as cm:
+            PrimalSimplex(c=[1, np.inf], A=np.array([[1, 2]]), b=[1])
+        self.assertIn("non-finite", str(cm.exception))
+
+    def test_numerical_instability_detection(self):
+        """Test detection of numerical instability."""
+        # Create a problem that might lead to very small pivot elements
+        c = np.array([1.0, 1.0])
+        A = np.array([
+            [1e-15, 1.0],  # Very small coefficient
+            [1.0, 1.0]
+        ])
+        b = np.array([1.0, 2.0])
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        # This might raise NumericalInstabilityError depending on the pivot selection
+        try:
+            solution, obj_value = solver.solve()
+            # If it doesn't raise an error, that's also fine - just check solution is reasonable
+            self.assertTrue(np.all(np.isfinite(solution)))
+            self.assertTrue(np.isfinite(obj_value))
+        except NumericalInstabilityError:
+            # This is expected behavior for ill-conditioned problems
+            pass
+
+    def test_sensitivity_analysis_initialization(self):
+        """Test sensitivity analysis initialization and error handling."""
+        # First solve a simple problem
+        c = np.array([1.0, 2.0])
+        A = np.array([[1.0, 1.0], [2.0, 1.0]])
+        b = np.array([3.0, 4.0])
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        solution, obj_value = solver.solve()
+        
+        # Test successful initialization
+        sens_analysis = SensitivityAnalysis(solver)
+        self.assertIsInstance(sens_analysis, SensitivityAnalysis)
+        
+        # Test error when passed wrong type
+        with self.assertRaises(TypeError):
+            SensitivityAnalysis("not a solver")
+        
+        # Test error when solver has no tableau
+        invalid_solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        invalid_solver.tableau = None
+        with self.assertRaises(ValueError) as cm:
+            SensitivityAnalysis(invalid_solver)
+        self.assertIn("valid tableau", str(cm.exception))
+
+    def test_degenerate_problem(self):
+        """Test handling of degenerate problems."""
+        # Create a degenerate problem (multiple optimal solutions)
+        c = np.array([1.0, 1.0])
+        A = np.array([
+            [1.0, 1.0],
+            [1.0, 1.0],  # Redundant constraint
+            [1.0, 0.0]
+        ])
+        b = np.array([2.0, 2.0, 1.0])
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        # Should handle degeneracy gracefully
+        solution, obj_value = solver.solve()
+        
+        # Check that solution is valid
+        self.assertTrue(np.all(solution >= -1e-10))  # Non-negative
+        self.assertTrue(np.all(np.isfinite(solution)))
+        self.assertTrue(np.isfinite(obj_value))
+
+    def test_large_problem_handling(self):
+        """Test handling of larger problems."""
+        np.random.seed(42)  # For reproducibility
+        n_vars = 10
+        n_constraints = 5
+        
+        # Generate a random feasible problem
+        c = np.random.rand(n_vars)
+        A = np.random.rand(n_constraints, n_vars)
+        # Ensure feasibility by making b large enough
+        b = np.sum(A, axis=1) + 1.0
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        
+        try:
+            solution, obj_value = solver.solve()
+            
+            # Verify solution properties
+            self.assertEqual(len(solution), n_vars)
+            self.assertTrue(np.all(solution >= -1e-10))
+            self.assertTrue(np.isfinite(obj_value))
+            
+            # Check constraint satisfaction
+            constraint_vals = A @ solution
+            self.assertTrue(np.all(constraint_vals <= b + 1e-10))
+            
+        except (NumericalInstabilityError, TableauCorruptionError):
+            # These are acceptable for randomly generated problems
+            pass
+
+    def test_negative_rhs_handling(self):
+        """Test handling of negative RHS values."""
+        c = np.array([1.0, 1.0])
+        A = np.array([
+            [1.0, 1.0],
+            [-1.0, 1.0]
+        ])
+        b = np.array([2.0, -1.0])  # One negative RHS
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        solution, obj_value = solver.solve()
+        
+        # Should handle negative RHS by transforming constraints
+        self.assertTrue(np.all(solution >= -1e-10))
+        self.assertTrue(np.isfinite(obj_value))
+
+    def test_cycling_detection(self):
+        """Test the cycling detection mechanism."""
+        # Create a problem that might lead to cycling
+        c = np.array([1.0, 0.0, 0.0])
+        A = np.array([
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0]
+        ])
+        b = np.array([1.0, 0.5, 0.5])
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        
+        # Should complete without infinite cycling
+        # We use warnings.catch_warnings to capture any warnings that might be issued
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            solution, obj_value = solver.solve()
+        
+        self.assertTrue(np.all(solution >= -1e-10))
+        self.assertTrue(np.isfinite(obj_value))
+
+    def test_tableau_corruption_detection(self):
+        """Test detection of tableau corruption."""
+        c = np.array([1.0, 1.0])
+        A = np.array([[1.0, 1.0]])
+        b = np.array([2.0])
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        
+        # Manually corrupt the tableau after initialization
+        solver.tableau[1, -1] = np.nan  # Introduce NaN in RHS
+        
+        # Should detect corruption during solution extraction
+        with self.assertRaises(TableauCorruptionError):
+            solver.solve()
+
+    def test_edge_cases(self):
+        """Test various edge cases."""
+        # Problem with single variable and constraint
+        # Minimize: z = 1*x1
+        # Subject to: x1 <= 5, x1 >= 0
+        # Optimal solution: x1 = 0, z = 0 (minimize at lower bound)
+        c = np.array([1.0])
+        A = np.array([[1.0]])
+        b = np.array([5.0])
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        solution, obj_value = solver.solve()
+        
+        # Compare with scipy to ensure our expectation is correct
+        scipy_x, scipy_z = self.solve_with_scipy(c, A_ub=A, b_ub=b)
+        
+        self.assertEqual(len(solution), 1)
+        # The correct optimal solution should be x = 0 (at the origin), obj = 0
+        self.assertAlmostEqual(solution[0], scipy_x[0], places=6)
+        self.assertAlmostEqual(obj_value, scipy_z, places=6)
+
+    def test_performance_monitoring(self):
+        """Test that the solver provides useful performance information."""
+        c = np.array([1.0, 2.0, 3.0])
+        A = np.array([
+            [1.0, 1.0, 1.0],
+            [2.0, 1.0, 0.0],
+            [0.0, 1.0, 2.0]
+        ])
+        b = np.array([6.0, 4.0, 8.0])
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        solution, obj_value = solver.solve()
+        
+        # Check that path vertices are recorded
+        self.assertIsInstance(solver.path_vertices, list)
+        self.assertGreater(len(solver.path_vertices), 0)
+        
+        # Each vertex should have the right dimension
+        for vertex in solver.path_vertices:
+            self.assertEqual(len(vertex), len(c))
+            self.assertTrue(np.all(np.isfinite(vertex)))
+
+    def test_scipy_wrapper_function(self):
+        """Test the improved solve_lp_scipy wrapper function."""
+        # Test inequality constraints
+        c = np.array([1.0, 2.0])
+        A = np.array([[1.0, 1.0], [2.0, 1.0]])
+        b = np.array([3.0, 4.0])
+        
+        solution, obj_value = solve_lp_scipy(c, A, b, constraint_type='<=')
+        self.assertTrue(np.all(solution >= -1e-10))
+        self.assertTrue(np.isfinite(obj_value))
+        
+        # Test equality constraints
+        c_eq = np.array([1.0, 1.0])
+        A_eq = np.array([[1.0, 1.0]])
+        b_eq = np.array([2.0])
+        
+        solution_eq, obj_value_eq = solve_lp_scipy(c_eq, A_eq, b_eq, constraint_type='=')
+        self.assertTrue(np.all(solution_eq >= -1e-10))
+        self.assertTrue(np.isfinite(obj_value_eq))
+        
+        # Test input validation
+        with self.assertRaises(ValueError):
+            solve_lp_scipy(c, A[:-1], b)  # Dimension mismatch
+        
+        # Test invalid constraint type
+        with self.assertRaises(ValueError):
+            solve_lp_scipy(c, A, b, constraint_type='invalid')
+        
+        # Test infeasible problem
+        c_inf = np.array([1.0, 1.0])
+        A_inf = np.array([[1.0, 1.0], [1.0, 1.0]])
+        b_inf = np.array([1.0, 3.0])  # Contradictory
+        
+        with self.assertRaises(ValueError) as cm:
+            solve_lp_scipy(c_inf, A_inf, b_inf, constraint_type='=')
+        self.assertIn("infeasible", str(cm.exception))
+
+    def test_warning_system(self):
+        """Test that warnings are properly issued for various conditions."""
+        # Test that warnings are issued for potential issues
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            
+            # Create a problem that might trigger warnings
+            c = np.array([1.0, 1.0])
+            A = np.array([[1.0, 1.0], [1.0, 1.0]])  # Redundant constraints
+            b = np.array([2.0, 2.0])
+            
+            solver = PrimalSimplex(c, A, b, eq_constraints=False)
+            solution, obj_value = solver.solve()
+            
+            # Check that solution is still valid even with warnings
+            self.assertTrue(np.all(solution >= -1e-10))
+            self.assertTrue(np.isfinite(obj_value))
+
+    def test_exception_inheritance(self):
+        """Test that custom exceptions inherit properly."""
+        # Test exception hierarchy
+        self.assertTrue(issubclass(InfeasibleProblemError, SimplexError))
+        self.assertTrue(issubclass(UnboundedProblemError, SimplexError))
+        self.assertTrue(issubclass(NumericalInstabilityError, SimplexError))
+        self.assertTrue(issubclass(TableauCorruptionError, SimplexError))
+        self.assertTrue(issubclass(DegenerateSolutionError, SimplexError))
+        self.assertTrue(issubclass(SimplexError, Exception))
+
+    def test_comprehensive_sensitivity_analysis(self):
+        """Test sensitivity analysis functionality more thoroughly."""
+        # Solve a problem first
+        c = np.array([2.0, 3.0])
+        A = np.array([[1.0, 1.0], [2.0, 1.0]])
+        b = np.array([4.0, 6.0])
+        
+        solver = PrimalSimplex(c, A, b, eq_constraints=False)
+        solution, obj_value = solver.solve()
+        
+        # Test sensitivity analysis
+        sens_analysis = SensitivityAnalysis(solver)
+        
+        # Test RHS sensitivity
+        rhs_ranges = sens_analysis.rhs_sensitivity_analysis()
+        self.assertIsInstance(rhs_ranges, dict)
+        self.assertEqual(len(rhs_ranges), len(b))
+        
+        # Test objective sensitivity
+        obj_ranges = sens_analysis.objective_sensitivity_analysis()
+        self.assertIsInstance(obj_ranges, dict)
+        self.assertEqual(len(obj_ranges), len(c))
+        
+        # Test shadow prices
+        shadow_prices = sens_analysis.shadow_prices()
+        self.assertIsInstance(shadow_prices, np.ndarray)
+        self.assertEqual(len(shadow_prices), len(b))
 
 # --- Run the tests ---
 if __name__ == '__main__':

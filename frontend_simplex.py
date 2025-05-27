@@ -3,23 +3,22 @@ import numpy as np
 import matplotlib.pyplot as plt
 from fractions import Fraction
 from tabulate import tabulate
-from simplex import PrimalSimplex  # Assuming the class is in primal_simplex.py
+from simplex import PrimalSimplex, SensitivityAnalysis  # Assuming class is in simplex.py
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from simplex import SensitivityAnalysis
+import matplotlib.patches as patches  # Keep for 2D polygon
 
 
 class SolutionStorage:
     def __init__(self, decimal_solution, decimal_optimal):
         self.decimal_solution = decimal_solution
         self.decimal_optimal = decimal_optimal
-        # self.fraction_solution = fraction_solution
-        # self.fraction_optimal = fraction_optimal
 
 
 def convert_to_fraction(value, solver, fraction_digits):
     """Convert a decimal value to a fraction string with given digit limit"""
+    if solver is None: return f"{float(value):.{fraction_digits}f}"  # Handle solver being None
     frac = solver._limit_fraction(Fraction(float(value)))
     # Get numerator and denominator
     num, den = frac.numerator, frac.denominator
@@ -31,46 +30,87 @@ def convert_to_fraction(value, solver, fraction_digits):
 
 
 def create_example_problem():
-    """Create a simple example LP problem"""
-    c = np.array([-3, -2, -4, -1, -5])
+    """Create a simple example 3D LP problem"""
+    # Minimize: -2x1 - 3x2 - 4x3
+    # Subject to:
+    #   x1 + x2 + x3 <= 6
+    #   2*x1 + x2 + 0*x3 <= 4
+    #   0*x1 + x2 + 3*x3 <= 7
+    #   x1, x2, x3 >= 0
+    # Optimal solution should be around x = [0.5, 3, 4/3], z = -15.33
+    c = np.array([-2, -3, -4])
     A = np.array([
-        [2, 1, 3, 1, 2],  # Constraint 1
-        [1, 2, 1, 3, 1],  # Constraint 2
-        [3, 1, 2, 1, 4],  # Constraint 3
-        [1, 1, 1, 1, 1],  # Constraint 4
+        [1, 1, 1],
+        [2, 1, 0],
+        [0, 1, 3],
     ])
-    b = np.array([10, 8, 12, 6])
+    b = np.array([6, 4, 7])
     return c, A, b
 
 
 def format_lp_problem(c, A, b, n, m, eq_constraints=False):
+    """
+    Format the LP problem in LaTeX.
+    
+    Parameters:
+    -----------
+    c : array-like
+        Coefficients of the objective function (length n)
+    A : array-like
+        Constraint coefficients matrix (m x n)
+    b : array-like
+        Right-hand side of constraints (length m)
+    n : int
+        Number of variables
+    m : int
+        Number of constraints
+    eq_constraints : bool, optional
+        Whether to use equality constraints (=) instead of inequalities (≤)
+    """
+    # Ensure dimensions are consistent
+    actual_m, actual_n = A.shape
+    n = min(n, actual_n)  # Use smaller of provided n or actual columns in A
+    m = min(m, actual_m)  # Use smaller of provided m or actual rows in A
+    
     latex = r"\begin{align*}"
+    obj_terms = []
+    for i in range(min(n, len(c))):
+         coeff = c[i]
+         term = f"{coeff:+}x_{{{i + 1}}}" if coeff >=0 else f"{coeff}x_{{{i + 1}}}"
+         # Simplify +1 or -1 coefficients
+         if abs(coeff) == 1:
+              term = f"+x_{{{i + 1}}}" if coeff == 1 else f"-x_{{{i + 1}}}"
+              if i == 0 and coeff == 1: term = f"x_{{{i + 1}}}" # No plus sign for first term if positive
+         obj_terms.append(term)
 
-    # Objective function
-    obj_terms = ' '.join([f'{c[i]:+}x_{i + 1}' if c[i] >= 0 else f'{c[i]}x_{i + 1}' for i in range(n)])
-    latex += f"\\min \\quad & z = {obj_terms} \\\\[1em]"  # Add vertical space here
-
-    # Add s.t. aligned under min
+    latex += f"\\min \\quad & z = {' '.join(obj_terms)} \\\\[1em]"
     latex += r"\text{s.t.} \quad & "
+    constraint_symbol = "=" if eq_constraints else r"\leq"
 
-    # Choose equality or inequality symbol based on eq_constraints flag
-    constraint_symbol = "=" if eq_constraints else "\\leq"
+    for i in range(m):
+        constraint_terms = []
+        for j in range(n):
+             if i < actual_m and j < actual_n:  # Check bounds before accessing A
+                 coeff = A[i, j]
+                 if abs(coeff) > 1e-10: # Only include non-zero terms
+                      term = f"{coeff:+}x_{{{j + 1}}}" if coeff >= 0 else f"{coeff}x_{{{j + 1}}}"
+                      if abs(coeff) == 1:
+                           term = f"+x_{{{j + 1}}}" if coeff == 1 else f"-x_{{{j + 1}}}"
+                      # Adjust sign for the first term in constraint
+                      if not constraint_terms and coeff > 0: # First positive term
+                           term = term.lstrip('+')
+                      constraint_terms.append(term)
 
-    # Add the first constraint
-    constraint = f"{' + '.join([f'{A[0, j]}x_{j + 1}' for j in range(n)])} {constraint_symbol} {b[0]}"
-    latex += f"\qquad {constraint} \\\\"
+        constraint_str = ' '.join(constraint_terms) if constraint_terms else "0"
+        if i < len(b):  # Check bounds before accessing b
+            latex += f"\qquad {constraint_str} {constraint_symbol} {b[i]}"
+        else:
+            latex += f"\qquad {constraint_str} {constraint_symbol} ?"  # Placeholder if b index is out of bounds
+        
+        if i < m - 1: latex += r" \\ & " # Add alignment for next row
 
-    # Add the remaining constraints, each aligned with the s.t.
-    for i in range(1, m):
-        constraint = f"{' + '.join([f'{A[i, j]}x_{j + 1}' for j in range(n)])} {constraint_symbol} {b[i]}"
-        latex += f"& \qquad {constraint} \\\\"
-
-    # Add non-negativity constraint
-    latex += r"& \qquad x_i \geq 0 \quad \forall i"
-
-    # Close environment
+    latex += r" \\ & \qquad x_j \geq 0 \quad \forall j \in \{1.." + str(n) + r"\}"
     latex += r"\end{align*}"
-
     return latex
 
 
@@ -83,13 +123,11 @@ def display_matrix(matrix, name):
 def validate_inputs(c, A, b):
     """Validate input dimensions and values"""
     try:
-        if len(c) != A.shape[1]:
-            return False, "Number of variables in objective function doesn't match constraints"
-        if len(b) != A.shape[0]:
-            return False, "Number of constraints doesn't match RHS"
+        if not isinstance(c, np.ndarray) or c.ndim != 1: return False, "c must be a 1D array"
+        if not isinstance(A, np.ndarray) or A.ndim != 2: return False, "A must be a 2D array"
+        if not isinstance(b, np.ndarray) or b.ndim != 1: return False, "b must be a 1D array"
         return True, "Valid inputs"
-    except:
-        return False, "Invalid input format"
+    except Exception as e: return False, f"Input validation error: {e}"
 
 
 def display_iteration(iteration, tableau, solver, use_fractions, fraction_digits=3, pivot_info=None):
@@ -191,265 +229,217 @@ def display_solution(solver, use_fractions):
     st.latex(solution_latex)
 
 
-def plot_lp_problem(c, A, b, solution=None, title="Linear Programming Visualization"):
+def plot_lp_problem(c, A, b, solution, path_vertices=None, min_x=-1, max_x=10, min_y=-1, max_y=10):
     """
-    Create a robust visualization of a 2D linear programming problem.
-
-    Parameters:
-    -----------
-    c : array-like
-        Coefficients of the objective function (length 2)
-    A : array-like
-        Constraint coefficients matrix
-    b : array-like
-        Right-hand side of constraints
-    solution : array-like, optional
-        The optimal solution to highlight (length 2)
-    title : str, optional
-        Title for the plot
+    Plot the LP problem, feasible region, optimal solution, and simplex path in 2D.
+    
+    Args:
+        c: objective coefficients
+        A: constraint matrix
+        b: right-hand side
+        solution: optimal solution (first 2 values used)
+        path_vertices: list of points representing the simplex path [optional]
+        min_x, max_x, min_y, max_y: initial bounds for plot (will be adjusted)
+    
+    Returns:
+        Matplotlib figure or None, error message if any
     """
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as patches
+    try:
+        # Make sure input dimensions are correct
+        if len(c) < 2 or A.shape[1] < 2:
+            return None, "Cannot visualize problem: need at least 2 variables for 2D plot"
 
-    # Ensure we're working with numpy arrays
-    c = np.array(c, dtype=float)
-    A = np.array(A, dtype=float)
-    b = np.array(b, dtype=float)
+        # Use only the first 2 coefficients and columns for 2D plot
+        c_2d = c[:2]
+        A_2d = A[:, :2]
 
-    if len(c) != 2:
-        return None, "Visualization is only available for problems with 2 variables."
+        # --- Determine Plot Bounds ---
+        # Start with initial bounds or defaults
+        plot_min_x, plot_max_x = min_x, max_x
+        plot_min_y, plot_max_y = min_y, max_y
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 8))
+        x_vals = np.array([])
+        y_vals = np.array([])
 
-    # Calculate initial bounds - start with a reasonable default
-    x_min, y_min = 0, 0
-    x_max, y_max = 10, 10
+        if solution is not None and len(solution) >= 2:
+            x_vals = np.append(x_vals, solution[0])
+            y_vals = np.append(y_vals, solution[1])
 
-    # Collect all potential vertices of the feasible region
-    vertices = []
+        if path_vertices and len(path_vertices) > 0:
+            for vertex in path_vertices:
+                if len(vertex) >= 2:
+                    x_vals = np.append(x_vals, vertex[0])
+                    y_vals = np.append(y_vals, vertex[1])
 
-    # Always include origin if it's feasible
-    origin_feasible = True
-    for i in range(len(b)):
-        if A[i, 0] * 0 + A[i, 1] * 0 > b[i] + 1e-10:
-            origin_feasible = False
-            break
+        # Add origin to bounds consideration
+        x_vals = np.append(x_vals, 0)
+        y_vals = np.append(y_vals, 0)
 
-    if origin_feasible:
-        vertices.append((0, 0))
+        # Calculate automatic bounds based on solution and path if available
+        if len(x_vals) > 0 and len(y_vals) > 0:
+            sol_min_x, sol_max_x = np.min(x_vals), np.max(x_vals)
+            sol_min_y, sol_max_y = np.min(y_vals), np.max(y_vals)
 
-    # Find intersections with axes
-    for i in range(len(b)):
-        # x-axis intersection (y=0)
-        if abs(A[i, 0]) > 1e-10:  # Avoid division by zero
-            x_intercept = b[i] / A[i, 0]
-            if x_intercept >= 0:
-                y_val = 0
-                # Check if point satisfies all constraints
-                feasible = True
-                for j in range(len(b)):
-                    if A[j, 0] * x_intercept + A[j, 1] * y_val > b[j] + 1e-10:
-                        feasible = False
-                        break
-                if feasible:
-                    vertices.append((x_intercept, 0))
-                    x_max = max(x_max, x_intercept * 1.2)
+            # Create margin around solution/path points (at least 20%, minimum margin of 2)
+            x_margin = max(2, (sol_max_x - sol_min_x) * 0.5) if sol_max_x > sol_min_x else 2
+            y_margin = max(2, (sol_max_y - sol_min_y) * 0.5) if sol_max_y > sol_min_y else 2
 
-        # y-axis intersection (x=0)
-        if abs(A[i, 1]) > 1e-10:  # Avoid division by zero
-            y_intercept = b[i] / A[i, 1]
-            if y_intercept >= 0:
-                x_val = 0
-                # Check if point satisfies all constraints
-                feasible = True
-                for j in range(len(b)):
-                    if A[j, 0] * x_val + A[j, 1] * y_intercept > b[j] + 1e-10:
-                        feasible = False
-                        break
-                if feasible:
-                    vertices.append((0, y_intercept))
-                    y_max = max(y_max, y_intercept * 1.2)
-
-    # Find intersections between constraints
-    for i in range(len(b)):
-        for j in range(i + 1, len(b)):
-            # Get coefficients
-            a1, b1 = A[i, 0], A[i, 1]
-            a2, b2 = A[j, 0], A[j, 1]
-            c1, c2 = b[i], b[j]
-
-            # Check if constraints are parallel
-            det = a1 * b2 - a2 * b1
-            if abs(det) < 1e-10:
-                continue
-
-            # Calculate intersection point
-            try:
-                x = (c1 * b2 - c2 * b1) / det
-                y = (a1 * c2 - a2 * c1) / det
-
-                # Check if point is in first quadrant
-                if x >= 0 and y >= 0:
-                    # Check if point satisfies all constraints
-                    feasible = True
-                    for k in range(len(b)):
-                        if A[k, 0] * x + A[k, 1] * y > b[k] + 1e-10:
-                            feasible = False
-                            break
-
-                    if feasible:
-                        vertices.append((x, y))
-                        x_max = max(x_max, x * 1.2)
-                        y_max = max(y_max, y * 1.2)
-            except:
-                # Skip any numerical issues
-                continue
-
-    # If solution is provided, add it to the vertices and update bounds
-    if solution is not None:
-        x_sol, y_sol = solution[0], solution[1]
-        vertices.append((x_sol, y_sol))
-        x_max = max(x_max, x_sol * 1.2)
-        y_max = max(y_max, y_sol * 1.2)
-
-    # Ensure we have reasonable bounds
-    x_max = max(10, x_max)
-    y_max = max(10, y_max)
-
-    # Draw non-negativity constraints
-    ax.axvline(x=0, color='black', linestyle='-', linewidth=2, label='x₁ ≥ 0')
-    ax.axhline(y=0, color='black', linestyle='-', linewidth=2, label='x₂ ≥ 0')
-
-    # Draw constraint lines
-    constraint_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
-
-    for i in range(len(b)):
-        a1, a2 = A[i, 0], A[i, 1]
-        if abs(a1) < 1e-10 and abs(a2) < 1e-10:
-            continue  # Skip degenerate constraints
-
-        color = constraint_colors[i % len(constraint_colors)]
-        constraint_text = f"Constraint {i + 1}: "
-
-        if abs(a1) > 1e-10:
-            constraint_text += f"{a1}x₁"
-
-        if abs(a2) > 1e-10:
-            if a2 > 0 and abs(a1) > 1e-10:
-                constraint_text += f" + {a2}x₂"
-            else:
-                constraint_text += f" {a2}x₂"
-
-        constraint_text += f" ≤ {b[i]}"
-
-        # Calculate points for the line
-        if abs(a1) < 1e-10:  # Horizontal line
-            y_val = b[i] / a2
-            ax.axhline(y=y_val, color=color, linestyle='-', linewidth=1.5, label=constraint_text)
-        elif abs(a2) < 1e-10:  # Vertical line
-            x_val = b[i] / a1
-            ax.axvline(x=x_val, color=color, linestyle='-', linewidth=1.5, label=constraint_text)
+            # Update bounds to include solution/path with margin, ensuring non-negativity if needed
+            # Ensure plot starts at or before 0 (or initial min_x)
+            plot_min_x = min(plot_min_x, sol_min_x - x_margin)
+            plot_max_x = max(plot_max_x, sol_max_x + x_margin)
+            plot_min_y = min(plot_min_y, sol_min_y - y_margin)
+            plot_max_y = max(plot_max_y, sol_max_y + y_margin)
         else:
-            # General line: calculate two points and draw
-            if a2 > 0:  # Line crosses y-axis
-                y_intercept = b[i] / a2
-                points = [(0, y_intercept)]
-            else:
-                points = []
+            # If no solution/path, ensure bounds include origin
+            plot_min_x = min(plot_min_x, -1)
+            plot_max_x = max(plot_max_x, 10)
+            plot_min_y = min(plot_min_y, -1)
+            plot_max_y = max(plot_max_y, 10)
 
-            if a1 > 0:  # Line crosses x-axis
-                x_intercept = b[i] / a1
-                points.append((x_intercept, 0))
+        # Ensure minimum plot range
+        if plot_max_x - plot_min_x < 1: plot_max_x = plot_min_x + 1
+        if plot_max_y - plot_min_y < 1: plot_max_y = plot_min_y + 1
 
-            # If we need more points for very skewed lines
-            if len(points) < 2:
-                # Calculate additional point using x_max
-                if abs(a2) > 1e-10:  # Avoid division by zero
-                    y_at_xmax = (b[i] - a1 * x_max) / a2
-                    if y_at_xmax >= 0:
-                        points.append((x_max, y_at_xmax))
+        # --- Create Plot ---
+        fig, ax = plt.subplots(figsize=(8, 6))
 
-                # Calculate additional point using y_max
-                if abs(a1) > 1e-10:  # Avoid division by zero
-                    x_at_ymax = (b[i] - a2 * y_max) / a1
-                    if x_at_ymax >= 0:
-                        points.append((x_at_ymax, y_max))
+        # Generate grid of points based on final bounds
+        x_grid = np.linspace(plot_min_x, plot_max_x, 400) # Increased resolution slightly
+        y_grid = np.linspace(plot_min_y, plot_max_y, 400)
+        X, Y = np.meshgrid(x_grid, y_grid)
 
-            # Draw line if we have at least 2 points
-            if len(points) >= 2:
-                sorted_points = sorted(points, key=lambda p: p[0])  # Sort by x-coordinate
-                xs, ys = zip(*sorted_points)
-                ax.plot(xs, ys, color=color, linestyle='-', linewidth=1.5, label=constraint_text)
+        # Plot constraints
+        constraint_colors = ['red', 'blue', 'green', 'purple', 'orange', 'cyan', 'magenta']
+        for i in range(A_2d.shape[0]):
+            # Skip empty constraints (all zeros)
+            if np.all(np.abs(A_2d[i]) < 1e-10):
+                continue
 
-    # Create the feasible region polygon if we have vertices
-    if len(vertices) >= 3:
-        # Sort vertices to form a convex hull
-        def polar_angle(p):
-            return np.arctan2(p[1] - centroid_y, p[0] - centroid_x)
+            a1, a2 = A_2d[i, 0], A_2d[i, 1]
+            bi = b[i]
+            label = f'C{i+1}: {a1:.2g}x₁ + {a2:.2g}x₂ ≤ {bi:.2g}'
+            color = constraint_colors[i % len(constraint_colors)]
 
-        centroid_x = sum(v[0] for v in vertices) / len(vertices)
-        centroid_y = sum(v[1] for v in vertices) / len(vertices)
+            # Plot the line for this constraint within the plot bounds
+            if abs(a2) > 1e-9:  # y coefficient non-zero, plot y = (b - a1*x) / a2
+                constraint_y = (bi - a1 * x_grid) / a2
+                ax.plot(x_grid, constraint_y, color=color, label=label)
+            elif abs(a1) > 1e-9:  # x coefficient non-zero, plot x = b / a1 (vertical)
+                constraint_x = bi / a1
+                ax.axvline(x=constraint_x, color=color, label=label)
+            # else: constraint is 0 <= bi, which is either always true or always false
 
-        sorted_vertices = sorted(vertices, key=polar_angle)
+        # Plot feasible region
+        mask = np.ones(X.shape, dtype=bool)
+        for i in range(A_2d.shape[0]):
+            if np.all(np.abs(A_2d[i]) < 1e-10): continue # Skip zero constraints
+            # Add small tolerance for boundary checks
+            mask = mask & (A_2d[i, 0] * X + A_2d[i, 1] * Y <= b[i] + 1e-9)
 
-        # Create polygon
-        polygon = patches.Polygon(sorted_vertices, closed=True,
-                                  facecolor='lightgray', alpha=0.5, edgecolor='gray')
-        ax.add_patch(polygon)
+        # Also mask non-negative constraints for x and y
+        mask = mask & (X >= -1e-9) & (Y >= -1e-9) # Use small tolerance
 
-    # Mark optimal solution if provided
-    if solution is not None:
-        x_sol, y_sol = solution
-        obj_value = c[0] * x_sol + c[1] * y_sol
+        # Fill feasible region
+        ax.imshow(np.where(mask, 0.1, np.nan), extent=[plot_min_x, plot_max_x, plot_min_y, plot_max_y],
+                 origin='lower', cmap='Blues', alpha=0.3, aspect='auto') # Use aspect='auto'
 
-        ax.scatter(x_sol, y_sol, color='red', s=100, marker='*',
-                   label=f'Optimal Solution ({x_sol:.2f}, {y_sol:.2f})')
+        # --- Plot objective function contours --- ### MODIFICATION START ###
+        if not np.all(np.abs(c_2d) < 1e-10):
+            Z = c_2d[0] * X + c_2d[1] * Y # Calculate objective value over the grid
 
-        ax.annotate(f'Objective value: {obj_value:.2f}',
-                    xy=(x_sol, y_sol),
-                    xytext=(x_sol + x_max * 0.05, y_sol + y_max * 0.05),
-                    arrowprops=dict(facecolor='black', shrink=0.05, width=1))
+            # Determine the range of Z within the plot bounds
+            z_min_plot = np.min(Z)
+            z_max_plot = np.max(Z)
 
-    # Draw objective function contours
-    x_grid = np.linspace(0, x_max, 100)
-    y_grid = np.linspace(0, y_max, 100)
-    X, Y = np.meshgrid(x_grid, y_grid)
-    Z = c[0] * X + c[1] * Y
+            # Ensure a small range if min/max are very close or equal
+            if np.isclose(z_min_plot, z_max_plot):
+                 z_max_plot = z_min_plot + max(abs(z_min_plot * 0.1), 1.0) # Add buffer
+                 if np.isclose(z_min_plot, z_max_plot): # If still close (e.g., near zero)
+                     z_max_plot = z_min_plot + 1.0
 
-    # For minimization problems with negative coefficients, negate Z for visualization
-    if c[0] < 0 or c[1] < 0:
-        Z = -Z
+            # Create levels within the calculated range (ensure increasing)
+            num_levels = 10
+            try:
+                # linspace might still fail if min/max are inf/nan, though unlikely here
+                z_levels = np.linspace(z_min_plot, z_max_plot, num_levels)
+                # Ensure levels are unique in case of numerical issues
+                z_levels = np.unique(np.round(z_levels, 8))
+                if len(z_levels) < 2: # Need at least 2 levels for contour
+                     # Fallback: let contour choose
+                     CS = ax.contour(X, Y, Z, num_levels, colors='gray', linestyles='dashed', alpha=0.7)
+                else:
+                     CS = ax.contour(X, Y, Z, levels=z_levels, colors='gray', linestyles='dashed', alpha=0.7)
 
-    # Generate contour levels
-    min_z = np.min(Z)
-    max_z = np.max(Z)
-    levels = np.linspace(min_z, max_z, 6)
+                ax.clabel(CS, inline=True, fontsize=8, fmt='%.1f')
 
-    # Draw contours
-    contours = ax.contour(X, Y, Z, levels=levels, alpha=0.7, cmap='viridis')
-    ax.clabel(contours, inline=True, fontsize=8)
+                # Add direction of improvement arrow (for MINIMIZATION)
+                # Arrow points in the direction of decreasing Z
+                mid_x, mid_y = (plot_min_x + plot_max_x) / 2, (plot_min_y + plot_max_y) / 2
+                arrow_len = min((plot_max_x - plot_min_x), (plot_max_y - plot_min_y)) / 10
+                # Point opposite to the gradient vector c = [c1, c2]
+                ax.arrow(mid_x, mid_y, -c_2d[0] * arrow_len, -c_2d[1] * arrow_len,
+                        head_width=arrow_len/3, head_length=arrow_len/2, fc='black', ec='black',
+                        label='Improvement Direction (Min)')
 
-    # Set axis limits with a bit of padding
-    padding = 0.05
-    x_range = max(1, x_max - x_min)
-    y_range = max(1, y_max - y_min)
+            except ValueError as ve:
+                 return None, f"Error creating contours: {ve}. Min/Max Z: {z_min_plot}/{z_max_plot}"
+        # --- ### MODIFICATION END ### ---
 
-    ax.set_xlim(x_min - padding * x_range, x_max + padding * x_range)
-    ax.set_ylim(y_min - padding * y_range, y_max + padding * y_range)
+        # Plot simplex path if provided
+        if path_vertices and len(path_vertices) > 0:
+            path_x = [v[0] for v in path_vertices if len(v) >= 2]
+            path_y = [v[1] for v in path_vertices if len(v) >= 2]
 
-    # Set labels and title
-    ax.set_xlabel('x₁', fontsize=12)
-    ax.set_ylabel('x₂', fontsize=12)
-    ax.set_title(title, fontsize=14)
-    ax.grid(True, alpha=0.3)
+            if len(path_x) > 1:  # Need at least 2 points for a path
+                ax.plot(path_x, path_y, 'o-', color='purple', markersize=5, linewidth=1.5,
+                       label='Simplex Path', zorder=5)
+                for i, (px, py) in enumerate(zip(path_x, path_y)):
+                    offset_x = (plot_max_x - plot_min_x) * 0.015 # Slightly larger offset
+                    offset_y = (plot_max_y - plot_min_y) * 0.015
+                    ax.annotate(f'{i}', xy=(px, py), xytext=(px + offset_x, py + offset_y),
+                               fontsize=8, color='purple', fontweight='bold', zorder=6)
 
-    # Add legend with reasonable size
-    ax.legend(loc='upper right', fontsize=8)
+        # Plot optimal solution
+        if solution is not None and len(solution) >= 2:
+             sol_x, sol_y = solution[0], solution[1]
+             # Check if solution is within reasonable bounds of the plot
+             if plot_min_x <= sol_x <= plot_max_x and plot_min_y <= sol_y <= plot_max_y:
+                 ax.scatter(sol_x, sol_y, color='green', s=100, marker='*',
+                           label=f'Optimal: ({sol_x:.3g}, {sol_y:.3g})', zorder=10)
+             else:
+                 # Indicate solution exists but is outside the current view
+                 ax.text(0.95, 0.01, f'Optimal: ({sol_x:.3g}, {sol_y:.3g}) (Outside View)',
+                         verticalalignment='bottom', horizontalalignment='right',
+                         transform=ax.transAxes, color='green', fontsize=8, style='italic')
 
-    plt.tight_layout()
-    return fig
+
+        # Configure plot
+        ax.set_xlim(plot_min_x, plot_max_x)
+        ax.set_ylim(plot_min_y, plot_max_y)
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.set_xlabel('x₁')
+        ax.set_ylabel('x₂')
+
+        # Adjust title based on minimization objective
+        ax.set_title(f'LP Problem: Minimize {c_2d[0]:.2g}x₁ + {c_2d[1]:.2g}x₂')
+
+        # Show the legend without duplicate entries
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        # Place legend outside plot area if too crowded
+        if len(by_label) > 5:
+             ax.legend(by_label.values(), by_label.keys(), loc='center left', bbox_to_anchor=(1, 0.5), fontsize=8)
+        else:
+             ax.legend(by_label.values(), by_label.keys(), loc='best', fontsize=8)
+
+        plt.tight_layout(rect=[0, 0, 0.85 if len(by_label) > 5 else 1, 1]) # Adjust layout if legend is outside
+        return fig, None
+
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc()) # Print full traceback to console for debugging
+        return None, f"Error creating 2D plot: {str(e)}"
 
 
 def add_visualization_to_main(c, A, b, solution):
@@ -821,6 +811,7 @@ def what_if_analysis_tab(sensitivity, original_c, original_A, original_b, solver
 def display_sensitivity_analysis(solver, original_c, original_A, original_b, use_fractions=False):
     """
     Display sensitivity analysis results in the Streamlit UI.
+    Only show interactive plots for 2D problems.
     """
     # Import necessary libraries
     from simplex import SensitivityAnalysis
@@ -831,6 +822,7 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
 
     # Perform sensitivity analysis
     sensitivity = SensitivityAnalysis(solver)
+    is_2d = (solver.n == 2) # Check if it's a 2D problem
 
     st.header("Sensitivity Analysis")
 
@@ -874,6 +866,9 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
 
             # Interactive analysis code
             st.subheader("Interactive Objective Coefficient Analysis")
+            
+            if not is_2d:
+                st.info("Interactive visualization is only available for 2D problems.")
 
             # Select a variable to analyze
             selected_var = st.selectbox(
@@ -906,7 +901,9 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
                 if is_within_range:
                     # Calculate the new objective value
                     delta_c = new_value - current_value
-                    new_obj = sensitivity.optimal_obj + delta_c * sensitivity.optimal_solution[j]
+                    # Ensure optimal_solution index exists (safe for n>=1)
+                    sol_j = sensitivity.optimal_solution[j] if j < len(sensitivity.optimal_solution) else 0
+                    new_obj = sensitivity.optimal_obj + delta_c * sol_j
 
                     col1, col2 = st.columns(2)
                     with col1:
@@ -921,9 +918,9 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
                             f"{new_obj - sensitivity.optimal_obj:.4f}"
                         )
 
-                    # If it's a 2D problem, visualize the change
-                    if solver.n == 2 and j < 2:
-                        st.subheader("Effect on Objective Function")
+                    # Only visualize for 2D problems
+                    if is_2d:
+                        st.subheader("Effect on Objective Function (2D)")
 
                         # Calculate new objective function
                         new_c = original_c.copy()
@@ -973,6 +970,9 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
 
             # Create an interactive visualization
             st.subheader("Interactive RHS Analysis")
+            
+            if not is_2d:
+                st.info("Interactive visualization is only available for 2D problems.")
 
             # Select a constraint to analyze
             selected_constraint = st.selectbox(
@@ -1005,7 +1005,7 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
                 if is_within_range:
                     # Get shadow price for this constraint
                     shadow_prices = sensitivity.shadow_prices()
-                    shadow_price = shadow_prices[i]
+                    shadow_price = shadow_prices[i] if i < len(shadow_prices) else 0
 
                     # Calculate the new objective value
                     delta_b = new_value - current_value
@@ -1024,9 +1024,9 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
                             f"{new_obj - sensitivity.optimal_obj:.4f}"
                         )
 
-                    # If it's a 2D problem, visualize the change
-                    if solver.n == 2:
-                        st.subheader("Effect on Feasible Region")
+                    # Only visualize for 2D problems
+                    if is_2d:
+                        st.subheader("Effect on Feasible Region (2D)")
 
                         # Create a new b vector
                         new_b = original_b.copy()
@@ -1052,10 +1052,11 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
         # Convert to DataFrame for better display
         shadow_data = []
         for i in range(solver.m):
+            price = shadow_prices[i] if i < len(shadow_prices) else 0
             shadow_data.append({
                 "Constraint": f"Constraint {i + 1}",
-                "Shadow Price": f"{shadow_prices[i]:.4f}",
-                "Interpretation": "Increasing the RHS by 1 unit would change the objective value by this amount"
+                "Shadow Price": f"{price:.4f}",
+                "Interpretation": "Change in objective per unit increase in RHS"
             })
 
         if shadow_data:
@@ -1095,6 +1096,9 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
         st.write("""
         Use this tool to explore how changes to multiple parameters simultaneously affect your optimal solution.
         """)
+
+        if not is_2d:
+            st.info("Interactive visualization is only available for 2D problems.")
 
         # Create two columns
         col1, col2 = st.columns(2)
@@ -1192,13 +1196,15 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
             # Effect of RHS changes
             for i in range(solver.m):
                 delta_b = new_b[i] - original_b[i]
-                delta_obj += shadow_prices[i] * delta_b
+                price = shadow_prices[i] if i < len(shadow_prices) else 0
+                delta_obj += price * delta_b
 
             # Effect of objective coefficient changes
             for j in range(solver.n):
-                if sensitivity.optimal_solution[j] > 0:
+                sol_j = sensitivity.optimal_solution[j] if j < len(sensitivity.optimal_solution) else 0
+                if sol_j > 1e-6:  # Only for basic variables with positive values
                     delta_c = new_c[j] - original_c[j]
-                    delta_obj += delta_c * sensitivity.optimal_solution[j]
+                    delta_obj += delta_c * sol_j
 
             new_obj = sensitivity.optimal_obj + delta_obj
 
@@ -1215,9 +1221,9 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
                     f"{new_obj - sensitivity.optimal_obj:.4f}"
                 )
 
-            # If it's a 2D problem, visualize the combined effect
-            if solver.n == 2:
-                st.subheader("Visualization of Changes")
+            # Only visualize for 2D problems
+            if is_2d:
+                st.subheader("Visualization of Changes (2D)")
 
                 fig = plot_combined_sensitivity(
                     solver, original_c, new_c, original_A, original_b, new_b,
@@ -1234,7 +1240,6 @@ def display_sensitivity_analysis(solver, original_c, original_A, original_b, use
         st.session_state.active_tab = 1
     elif tab1.selected:
         st.session_state.active_tab = 0
-
 
 
 def plot_objective_sensitivity(solver, original_c, new_c, optimal_solution, changed_index, original_obj, new_obj):
@@ -1732,6 +1737,109 @@ def plot_combined_sensitivity(solver, original_c, new_c, A, original_b, new_b, o
     return fig
 
 
+def plot_lp_problem_3d(c, A, b, solution=None, path_vertices=None, title="3D Linear Programming Visualization"):
+    """
+    Create a visualization of a 3D linear programming problem, including simplex path.
+    """
+    # ... (check for 3 variables) ...
+    if len(c) < 3 or A.shape[1] < 3:
+        st.warning("3D Visualization requires 3 variables.")
+        return None
+
+    c = np.array(c[:3], dtype=float) # Ensure use only first 3 coeffs
+    A = np.array(A[:, :3], dtype=float) # Ensure use only first 3 cols
+    b = np.array(b, dtype=float)
+
+
+    fig = go.Figure()
+
+    # --- Determine bounds ---
+    max_coord = 10.0
+    all_coords = []
+    if solution is not None and len(solution) >= 3: all_coords.extend(solution[:3])
+    if path_vertices:
+        for v in path_vertices:
+            if len(v) >= 3: all_coords.extend(v[:3])
+    # Add axis intercepts
+    for i in range(A.shape[0]):
+         if abs(A[i,0]) > 1e-9 and b[i]/A[i,0] >= 0: all_coords.append(b[i]/A[i,0])
+         if abs(A[i,1]) > 1e-9 and b[i]/A[i,1] >= 0: all_coords.append(b[i]/A[i,1])
+         if abs(A[i,2]) > 1e-9 and b[i]/A[i,2] >= 0: all_coords.append(b[i]/A[i,2])
+
+    if all_coords: max_coord = max(max(all_coords) * 1.2, 5.0) # Add buffer, min 5
+    else: max_coord = 5.0 # Default if no points
+
+    # --- Grid for Isosurfaces ---
+    grid_res = 15 # Resolution
+    x_vals = np.linspace(0, max_coord, grid_res)
+    y_vals = np.linspace(0, max_coord, grid_res)
+    z_vals = np.linspace(0, max_coord, grid_res)
+    X, Y, Z = np.meshgrid(x_vals, y_vals, z_vals, indexing='ij') # Use 'ij' indexing
+
+    # --- Plot Constraint Planes (as before) ---
+    constraint_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+    for i in range(A.shape[0]):
+        a1, a2, a3 = A[i, 0], A[i, 1], A[i, 2]
+        rhs = b[i]
+        constraint_values = a1 * X + a2 * Y + a3 * Z
+        label = f'C{i+1}: {a1:.1f}x₁+ {a2:.1f}x₂+ {a3:.1f}x₃ ≤ {rhs:.1f}'
+        fig.add_trace(go.Isosurface(
+            x=X.flatten(), y=Y.flatten(), z=Z.flatten(),
+            value=constraint_values.flatten(),
+            isomin=rhs, isomax=rhs, surface_count=1,
+            opacity=0.3, # Slightly lower opacity
+            colorscale=[[0, constraint_colors[i % len(constraint_colors)]], [1, constraint_colors[i % len(constraint_colors)]]],
+            showscale=False, name=label
+        ))
+
+    # --- Plot Non-negativity Planes (optional, can clutter) ---
+    # fig.add_trace(go.Surface(x=[[0,max_coord],[0,max_coord]], y=[[0,0],[0,0]], z=[[0,0],[max_coord,max_coord]], opacity=0.1, colorscale=[[0,'lightgrey'],[1,'lightgrey']], showscale=False, name='x₂=0'))
+    # fig.add_trace(go.Surface(x=[[0,0],[0,0]], y=[[0,max_coord],[0,max_coord]], z=[[0,0],[max_coord,max_coord]], opacity=0.1, colorscale=[[0,'lightgrey'],[1,'lightgrey']], showscale=False, name='x₁=0'))
+    # fig.add_trace(go.Surface(x=[[0,max_coord],[0,max_coord]], y=[[0,0],[max_coord,max_coord]], z=[[0,0],[0,0]], opacity=0.1, colorscale=[[0,'lightgrey'],[1,'lightgrey']], showscale=False, name='x₃=0'))
+
+
+    # --- Plot Simplex Path ---
+    if path_vertices and len(path_vertices) > 0:
+        path_x = [v[0] for v in path_vertices if len(v)>=3]
+        path_y = [v[1] for v in path_vertices if len(v)>=3]
+        path_z = [v[2] for v in path_vertices if len(v)>=3]
+        fig.add_trace(go.Scatter3d(
+            x=path_x, y=path_y, z=path_z,
+            mode='lines+markers',
+            line=dict(color='orange', width=4),
+            marker=dict(color='orange', size=5),
+            name='Simplex Path'
+        ))
+
+    # --- Plot Optimal Solution ---
+    if solution is not None and len(solution) >= 3:
+        x_sol, y_sol, z_sol = solution[0], solution[1], solution[2]
+        obj_value = np.dot(c, [x_sol, y_sol, z_sol])
+        fig.add_trace(go.Scatter3d(
+            x=[x_sol], y=[y_sol], z=[z_sol],
+            mode='markers',
+            marker=dict(size=8, color='red', symbol='diamond'),
+            name=f'Optimal ({x_sol:.2f}, {y_sol:.2f}, {z_sol:.2f}), Z={obj_value:.2f}'
+        ))
+
+    # --- Configure Layout ---
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis_title='x₁', yaxis_title='x₂', zaxis_title='x₃',
+            xaxis=dict(range=[0, max_coord], autorange=False, zeroline=True, zerolinewidth=2, zerolinecolor='black'),
+            yaxis=dict(range=[0, max_coord], autorange=False, zeroline=True, zerolinewidth=2, zerolinecolor='black'),
+            zaxis=dict(range=[0, max_coord], autorange=False, zeroline=True, zerolinewidth=2, zerolinecolor='black'),
+            aspectmode='cube',
+            camera_eye=dict(x=1.8, y=1.8, z=0.8) # Adjust initial camera angle
+        ),
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+        margin=dict(l=0, r=0, b=0, t=40)
+    )
+
+    return fig
+
+
 def initialize_session_state():
     """Initialize all required session state variables"""
     if 'solution_storage' not in st.session_state:
@@ -1784,12 +1892,18 @@ def main():
     st.sidebar.header("Problem Setup")
 
     # Option to use example problem
-    use_example = st.sidebar.checkbox("Use example problem", key='use_example')
+    use_example = st.sidebar.checkbox("Use example problem", value=True, key='use_example')
 
     # Get problem parameters
     if use_example:
         c, A, b = create_example_problem()
         m, n = A.shape
+        # Update sidebar widgets to reflect the example
+        st.session_state['m'] = m
+        st.session_state['n'] = n
+        st.session_state['c_input'] = ",".join(map(str, c))
+        st.session_state['A_input'] = "\n".join(",".join(map(str, row)) for row in A)
+        st.session_state['b_input'] = ",".join(map(str, b))
     elif st.session_state.sensitivity_resample is not None:
         # Use the resampled parameters from sensitivity analysis
         c = st.session_state.sensitivity_resample['c']
@@ -1798,15 +1912,25 @@ def main():
         m, n = A.shape
 
         st.info("Using modified parameters from sensitivity analysis")
+        # Update sidebar widgets
+        st.session_state['m'] = m
+        st.session_state['n'] = n
+        st.session_state['c_input'] = ",".join(map(str, c))
+        st.session_state['A_input'] = "\n".join(",".join(map(str, row)) for row in A)
+        st.session_state['b_input'] = ",".join(map(str, b))
     else:
         # Get dimensions
         col1, col2 = st.sidebar.columns(2)
-        m = col1.number_input("Number of constraints (m)", min_value=1, value=3, key='m')
-        n = col2.number_input("Number of variables (n)", min_value=1, value=2, key='n')
+        # Use st.session_state values if they exist, otherwise default
+        m_val = st.session_state.get('m', 3)
+        n_val = st.session_state.get('n', 3) # Default n to 3
+        m = col1.number_input("Number of constraints (m)", min_value=1, value=m_val, key='m')
+        n = col2.number_input("Number of variables (n)", min_value=1, value=n_val, key='n')
 
         # Input for objective function coefficients
         st.sidebar.subheader("Objective Function Coefficients (c)")
-        c_input = st.sidebar.text_input("Enter c values (comma-separated)", "2,3", key='c_input')
+        c_default = st.session_state.get('c_input', "-2,-3,-4") # Default c for 3D
+        c_input = st.sidebar.text_input("Enter c values (comma-separated)", c_default, key='c_input')
         try:
             c = np.array([float(x.strip()) for x in c_input.split(",")])
         except:
@@ -1815,11 +1939,8 @@ def main():
 
         # Input for constraint matrix A
         st.sidebar.subheader("Constraint Matrix (A)")
-        A_input = st.sidebar.text_area(
-            "Enter A matrix (one row per line, comma-separated)",
-            "1,2\n2,1\n1,1",
-            key='A_input'
-        )
+        A_default = st.session_state.get('A_input', "1,1,1\n2,1,0\n0,1,3") # Default A for 3D
+        A_input = st.sidebar.text_area("Enter A matrix (one row per line, comma-separated)", A_default, key='A_input')
         try:
             A = np.array([
                 [float(x.strip()) for x in row.split(",")]
@@ -1831,7 +1952,8 @@ def main():
 
         # Input for RHS values
         st.sidebar.subheader("Right Hand Side (b)")
-        b_input = st.sidebar.text_input("Enter b values (comma-separated)", "10,8,5", key='b_input')
+        b_default = st.session_state.get('b_input', "6,4,7") # Default b for 3D
+        b_input = st.sidebar.text_input("Enter b values (comma-separated)", b_default, key='b_input')
         try:
             b = np.array([float(x.strip()) for x in b_input.split(",")])
         except:
@@ -1885,7 +2007,7 @@ def main():
             from simplex import PrimalSimplex, SensitivityAnalysis
 
             # Create solver instance with fractions
-            solver = PrimalSimplex(c, A, b, use_fractions=True, fraction_digits=fraction_digits,
+            solver = PrimalSimplex(c.copy(), A.copy(), b.copy(), use_fractions=True, fraction_digits=fraction_digits,
                                    eq_constraints=eq_constraints)
 
             # Store original parameters for sensitivity analysis
@@ -1924,12 +2046,18 @@ def main():
             decimal_solution = np.zeros(solver.n)
             for i in range(solver.n):
                 col = solver.tableau[:, i]
-                if np.sum(col == 1) == 1 and np.sum(col == 0) == solver.m:
-                    row_idx = np.where(col == 1)[0][0]
-                    if row_idx < len(solver.tableau):
-                        decimal_solution[i] = solver.tableau[row_idx, -1]
+                # Check if it's a basic variable column
+                is_basic = (np.sum(col == 1) == 1) and (np.allclose(col[col != 1], 0))
+                if is_basic:
+                    row_idx = np.where(np.isclose(col, 1))[0][0]
+                    # Ensure row_idx is within bounds and not the objective row
+                    if row_idx > 0 and row_idx < solver.tableau.shape[0]:
+                         # Check if RHS is valid before assignment
+                        rhs_val = solver.tableau[row_idx, -1]
+                        if not np.isnan(rhs_val) and not np.isinf(rhs_val):
+                             decimal_solution[i] = rhs_val
 
-            decimal_optimal = -solver.tableau[0, -1]
+            decimal_optimal = -solver.tableau[0, -1] if not np.isnan(solver.tableau[0, -1]) else np.nan
 
             # Store only decimal values in solution storage
             st.session_state.solution_storage = SolutionStorage(
@@ -1945,6 +2073,10 @@ def main():
 
         except Exception as e:
             st.error(f"Error solving problem: {str(e)}")
+            # Reset state if solve failed
+            st.session_state.has_solved = False
+            st.session_state.solution_storage = None
+            st.session_state.solver = None
             return
 
     # Display solution progress if available
@@ -1952,7 +2084,7 @@ def main():
         st.success("Optimal solution found!")
 
         # Option to show solution progress
-        show_progress = st.checkbox("Show solution progress", value=True)
+        show_progress = st.checkbox("Show solution progress", value=False)
 
         if show_progress:
             st.markdown("### Solution Progress")
@@ -1964,49 +2096,73 @@ def main():
         st.header("Optimal Solution")
         display_solution(st.session_state.solver, use_fractions)
 
-        # Add visualization for 2D problems
-        if len(c) == 2:
-            st.header("Problem Visualization")
+        # --- Visualization Section ---
+        current_n = st.session_state.solver.n # Number of variables from the solver
+        solution = st.session_state.solution_storage.decimal_solution
+        # Ensure solution has the correct length matching current_n
+        if len(solution) != current_n:
+            # Handle potential mismatch if solver internals changed n
+             st.warning(f"Solution length ({len(solution)}) mismatch with variable count ({current_n}). Using first {current_n} values.")
+             solution = solution[:current_n] if len(solution) > current_n else np.pad(solution, (0, current_n - len(solution)))
 
-            # Get solution from storage
-            solution = st.session_state.solution_storage.decimal_solution
+        # Retrieve potentially modified c, A, b used by the solver if needed
+        # Or better, use the original_params if available
+        if st.session_state.original_params:
+            viz_c = st.session_state.original_params['c']
+            viz_A = st.session_state.original_params['A']
+            viz_b = st.session_state.original_params['b']
+             # Make sure viz_c matches current_n
+            if len(viz_c) != current_n:
+                 # This case is less likely but handle defensively
+                 st.warning("Objective function length mismatch during visualization.")
+                 # Fallback or adjust viz_c if necessary
+                 viz_c = viz_c[:current_n] if len(viz_c) > current_n else np.pad(viz_c, (0, current_n - len(viz_c)))
+        else: # Fallback if original params aren't set
+            viz_c, viz_A, viz_b = st.session_state.problem_params
 
-            # Check if this is a large-scale problem
-            is_large_scale = solution[0] > 100 or solution[1] > 100
-
+        if current_n == 2:
+            st.header("Problem Visualization (2D)")
+            # Use existing 2D plotting (including large scale options)
+            # Ensure solution has length 2 for 2D plots
+            sol_2d = solution[:2] if len(solution) >= 2 else np.pad(solution, (0, 2-len(solution)))
+            is_large_scale = sol_2d[0] > 100 or sol_2d[1] > 100
             if is_large_scale:
-                st.info("This problem has a large-scale solution. You can choose how to visualize it.")
-
-                viz_option = st.radio(
-                    "Visualization Option:",
-                    ["Show feasible region (may not show optimal point)",
-                     "Show full problem (may be zoomed out)",
-                     "Focus around solution"],
-                    index=0
-                )
-
-                if viz_option == "Show feasible region (may not show optimal point)":
-                    # Default visualization (may not show the optimal point)
-                    fig = plot_lp_problem(c, A, b, solution, "LP Problem Visualization")
-                    st.pyplot(fig)
-
-                    # Add note about the solution
-                    st.write(
-                        f"**Note:** The optimal solution at ({solution[0]:.2f}, {solution[1]:.2f}) may be outside the visible area.")
-
-                elif viz_option == "Show full problem (may be zoomed out)":
-                    # Create a matplotlib figure that shows the full problem
-                    fig = plot_full_problem(c, A, b, solution)
-                    st.pyplot(fig)
-
-                else:  # Focus around solution
-                    # Create a visualization focused on the solution area
-                    fig = plot_solution_focus(c, A, b, solution)
-                    st.pyplot(fig)
+                st.info("This 2D problem has a large-scale solution. Choose visualization.")
+                viz_option = st.radio("Visualization Option:", ["Feasible region", "Full problem", "Focus solution"], index=0)
+                if viz_option == "Feasible region":
+                    # Use path_vertices=None for the feasible region plot
+                    fig, err_msg = plot_lp_problem(viz_c, viz_A, viz_b, sol_2d)
+                    if fig: 
+                        st.pyplot(fig)
+                    elif err_msg:
+                        st.warning(err_msg)
+                    st.write(f"Note: Optimal solution at ({sol_2d[0]:.2f}, {sol_2d[1]:.2f}) may be outside.")
+                elif viz_option == "Full problem":
+                    fig = plot_full_problem(viz_c, viz_A, viz_b, sol_2d)
+                    if fig: st.pyplot(fig)
+                else: # Focus solution
+                    fig = plot_solution_focus(viz_c, viz_A, viz_b, sol_2d)
+                    if fig: st.pyplot(fig)
             else:
-                # For normal-scale problems, use the standard visualization
-                fig = plot_lp_problem(c, A, b, solution, "LP Problem Visualization")
-                st.pyplot(fig)
+                # Use the simplex path for the regular plot
+                simplex_path = getattr(st.session_state.solver, 'path_vertices', None)
+                fig, err_msg = plot_lp_problem(viz_c, viz_A, viz_b, sol_2d, path_vertices=simplex_path)
+                if fig: 
+                    st.pyplot(fig)
+                elif err_msg:
+                    st.warning(err_msg)
+        
+        elif current_n == 3:
+            st.header("Problem Visualization (3D)")
+            # Call the new 3D plotting function
+            # Ensure solution has length 3
+            sol_3d = solution[:3] if len(solution) >= 3 else np.pad(solution, (0, 3-len(solution)))
+            fig_3d = plot_lp_problem_3d(viz_c, viz_A, viz_b, sol_3d)
+            if fig_3d: # Check if plot was created
+                st.plotly_chart(fig_3d, use_container_width=True)
+        
+        else:
+            st.info(f"Visualization is only available for 2 or 3 variables (Problem has {current_n}).")
 
         # Add sensitivity analysis section if the problem is solved
         if st.session_state.solver is not None and st.session_state.original_params is not None:

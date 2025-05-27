@@ -78,7 +78,7 @@ The easiest way is to visit my apps website on streamlit:
 
 1. Start the Streamlit application (powershell):
 ```powershell
-python -m streamlit run app.py
+python -m streamlit run frontend_simplex.py
 ```
 
 or for other shells:
