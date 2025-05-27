@@ -1,14 +1,22 @@
-# Linear Programming Solver
+# Simplex Algorithm & LP Solver
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Nicolas2912/SimplexAlgorithm)
 
 ![Linear Programming Solver Demo](app_record.gif)
 
-A comprehensive implementation of Linear Programming algorithms, featuring both the Primal Simplex method and Interior Point method for solving Linear Programming problems. This project includes a robust backend solver implementation and a user-friendly web interface built with Streamlit.
+A comprehensive optimization toolkit, including:
+- Primal Simplex algorithm (with Bland's anti-cycling rule)
+- Karmarkar's Interior Point method
+- Branch & Bound solver for 0/1 Knapsack problems
+- SciPy and Gurobi integrations for LP/MIP solving and verification
+- Google Gemini LLM-assisted LP formulation and code generation
+All accessible through an interactive Streamlit web interface.
 
 ## Features
 
-- Multiple LP solver implementations:
-  - Two-Phase Primal Simplex algorithm
-  - Karmarkar's Interior Point method
+- Multiple solver implementations:
+  - Primal Simplex algorithm (with Bland's anti-cycling rule)
+  - SciPy and Gurobi-based LP/MIP solvers for comparison and verification
 - Comprehensive support for LP problem types:
   - Equality constraints
   - Inequality constraints
@@ -35,25 +43,39 @@ A comprehensive implementation of Linear Programming algorithms, featuring both 
 ## Project Structure
 
 ```
-linear-programming-solver/
-├── simplex.py           # Core implementation of the Primal Simplex algorithm
-├── inner_point.py       # Implementation of Karmarkar's Interior Point algorithm
-├── sensitivity_ui.py    # UI components for sensitivity analysis
-├── ui_components.py     # Reusable UI components for Streamlit interface
-├── plotting.py          # Visualization functions for LP problems
-├── utils.py             # Utility functions and helpers
-├── app.py               # Main Streamlit application entry point
-├── frontend_simplex.py  # Streamlit web interface
-├── test_simplex.py      # Test suite for validating solver implementations
-└── requirements.txt     # Project dependencies
+SimplexAlgorithm/
+├── README.md
+├── Simplex_Frontend.gif
+├── app_record.gif
+├── branch_and_bound.py          # Branch & Bound solver for knapsack problems
+├── debug/                       # Debugging scripts and utilities
+│   ├── debug_compare.py
+│   ├── debug_simplex.py
+│   └── debug_tableau.py
+├── frontend_simplex.py          # Streamlit web interface (legacy)
+├── simplex_solver.py            # Main Streamlit application entry point
+├── gurobi_solver.py             # Gurobi-based MIP solver example
+├── inner_point.py               # Karmarkar's Interior Point algorithm
+├── pages/                       # Additional Streamlit pages
+│   └── llm_lp_solver.py         # LLM-assisted LP formulation and code generation
+├── plotting.py                  # Visualization functions for LP problems
+├── sensitivity_ui.py            # Streamlit UI for sensitivity analysis
+├── simplex.py                   # Core Primal Simplex implementation
+├── ui_components.py             # Reusable UI components for Streamlit interface
+├── utils.py                     # Utility functions and helpers
+├── test_blands_rule.py          # Demonstration of Bland's anti-cycling rule
+├── test_simplex.py              # Test suite for validating solver implementations
+├── requirements.txt             # Project dependencies
+└── .devcontainer/               # Development container configuration
+    └── devcontainer.json
 ```
 
 ## Installation
 
 1. Clone the repository:
 ```powershell
-git clone https://github.com/nicolas2912/linear-programming-solver.git
-cd linear-programming-solver
+git clone https://github.com/Nicolas2912/SimplexAlgorithm.git
+cd SimplexAlgorithm
 ```
 
 2. Create and activate a conda environment:
@@ -65,6 +87,11 @@ conda activate lp-solver
 3. Install dependencies:
 ```powershell
 pip install -r requirements.txt
+
+4. (Optional) Configure the LLM LP Solver:
+```bash
+echo GEMINI_API_KEY=your_api_key_here > .env
+```
 ```
 
 ## Usage
@@ -76,17 +103,25 @@ The easiest way is to visit my apps website on streamlit:
 
 ### Running the Web Interface locally
 
-1. Start the Streamlit application (powershell):
+1. Start the Streamlit application:
 ```powershell
-python -m streamlit run frontend_simplex.py
+python -m streamlit run simplex_solver.py
 ```
 
 or for other shells:
 ```bash
-python run app.py
+python -m streamlit run simplex_solver.py
 ```
 
 2. Open your web browser and navigate to the provided URL (typically http://localhost:8501)
+
+#### LLM LP Solver Page
+
+To use the Google Gemini LLM-based LP solver interface, ensure you have a valid `GEMINI_API_KEY` configured (see Installation), then run:
+
+```bash
+python -m streamlit run pages/llm_lp_solver.py
+```
 
 ### Using the Command Line Interface
 
@@ -166,12 +201,13 @@ print("RHS ranges:", rhs_ranges)
 print("Shadow prices:", shadow_prices)
 ```
 
+
 ## Testing
 
-The project includes a comprehensive test suite that validates the correctness of the simplex implementation:
+The project includes a comprehensive test suite that validates solver implementations:
 
-```powershell
-python -m unittest test_simplex.py
+```bash
+python -m unittest discover -v
 ```
 
 Tests include:
@@ -180,6 +216,7 @@ Tests include:
 - Unbounded and infeasible problems
 - Problems with numerical stability challenges
 - Comparison with SciPy's LP solver implementation
+- Bland's anti-cycling rule demonstration script
 
 ## Problem Format
 
