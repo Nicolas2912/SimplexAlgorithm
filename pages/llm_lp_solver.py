@@ -231,7 +231,7 @@ if prompt and api_key_configured:
                 with st.spinner("🐍 Generating and Executing Scipy code..."): # Updated spinner text
                     # Generate content using the client
                     code_response = client.models.generate_content(
-                        model='gemini-2.0-flash', # Or your preferred model
+                        model='gemini-2.0-flash', # Or your preferred model (gemini-2.5-flash-preview-05-20; gemini-2.0-flash, gemini-2.5-pro-preview-05-06)
                         contents=code_gen_prompt,
                         # safety_settings=... # Optional safety settings
                     )
