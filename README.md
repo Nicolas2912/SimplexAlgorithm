@@ -5,18 +5,17 @@
 ![Linear Programming Solver Demo](app_record.gif)
 
 A comprehensive optimization toolkit, including:
-- Primal Simplex algorithm (with Bland's anti-cycling rule)
-- Karmarkar's Interior Point method
-- Branch & Bound solver for 0/1 Knapsack problems
-- SciPy and Gurobi integrations for LP/MIP solving and verification
-- Google Gemini LLM-assisted LP formulation and code generation
+ - Primal Simplex algorithm (with Bland's anti-cycling rule)
+ - Karmarkar's Interior Point method
+ - SciPy integration for LP solving and verification
+ - Google Gemini LLM-assisted LP formulation and code generation
 All accessible through an interactive Streamlit web interface.
 
 ## Features
 
 - Multiple solver implementations:
   - Primal Simplex algorithm (with Bland's anti-cycling rule)
-  - SciPy and Gurobi-based LP/MIP solvers for comparison and verification
+  - SciPy-based LP/MIP solvers for comparison and verification
 - Comprehensive support for LP problem types:
   - Equality constraints
   - Inequality constraints
@@ -47,14 +46,12 @@ SimplexAlgorithm/
 ├── README.md
 ├── Simplex_Frontend.gif
 ├── app_record.gif
-├── branch_and_bound.py          # Branch & Bound solver for knapsack problems
 ├── debug/                       # Debugging scripts and utilities
 │   ├── debug_compare.py
 │   ├── debug_simplex.py
 │   └── debug_tableau.py
 ├── frontend_simplex.py          # Streamlit web interface (legacy)
 ├── simplex_solver.py            # Main Streamlit application entry point
-├── gurobi_solver.py             # Gurobi-based MIP solver example
 ├── inner_point.py               # Karmarkar's Interior Point algorithm
 ├── pages/                       # Additional Streamlit pages
 │   └── llm_lp_solver.py         # LLM-assisted LP formulation and code generation
@@ -63,7 +60,6 @@ SimplexAlgorithm/
 ├── simplex.py                   # Core Primal Simplex implementation
 ├── ui_components.py             # Reusable UI components for Streamlit interface
 ├── utils.py                     # Utility functions and helpers
-├── test_blands_rule.py          # Demonstration of Bland's anti-cycling rule
 ├── test_simplex.py              # Test suite for validating solver implementations
 ├── requirements.txt             # Project dependencies
 └── .devcontainer/               # Development container configuration
@@ -216,7 +212,6 @@ Tests include:
 - Unbounded and infeasible problems
 - Problems with numerical stability challenges
 - Comparison with SciPy's LP solver implementation
-- Bland's anti-cycling rule demonstration script
 
 ## Problem Format
 
