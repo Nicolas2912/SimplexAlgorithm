@@ -162,11 +162,17 @@ class PrimalSimplex:
             tableau[1:, :self.n] = self.A
             tableau[1:, self.n:self.n + self.m] = np.eye(self.m)
             tableau[1:, -1] = self.b
-            tableau[0, self.artificial_indices] = -1
+            
+            # Set Phase I objective: minimize sum of artificial variables
+            # In standard form, we want to minimize w = sum(artificial variables)
+            # So the objective row should have +1 for artificial variables initially
+            tableau[0, self.artificial_indices] = 1
 
-            # Make objective row consistent
+            # Make objective row consistent with current basis
+            # Since artificial variables are basic initially (with coefficient 1 in their columns),
+            # we need to eliminate them from the objective row by subtracting the constraint rows
             for i in range(1, self.m + 1):
-                tableau[0, :] += tableau[i, :]
+                tableau[0, :] -= tableau[i, :]
 
             return tableau
 
@@ -204,7 +210,8 @@ class PrimalSimplex:
     def _find_pivot_column_phase_one(self):
         """Find the entering variable for Phase I using Bland's rule."""
         obj_coeffs = self.tableau[0, :self.n + self.m]
-        valid_indices = np.where(obj_coeffs > 1e-10)[0]
+        # In Phase I, we look for negative coefficients (most negative rule for minimization)
+        valid_indices = np.where(obj_coeffs < -1e-10)[0]
         return min(valid_indices) if len(valid_indices) > 0 else None
 
     def _find_pivot_row(self, pivot_col):
@@ -422,10 +429,14 @@ class PrimalSimplex:
             col = self.tableau[:, j]
             constraint_rows = col[1:]
             rows_one = np.where(np.isclose(constraint_rows, 1.0))[0] + 1
+            rows_minus_one = np.where(np.isclose(constraint_rows, -1.0))[0] + 1
             rows_nonzero_constraints = np.where(np.abs(constraint_rows) > 1e-10)[0] + 1
 
-            if len(rows_one) == 1 and len(rows_nonzero_constraints) == 1:
-                row_with_one = rows_one[0]
+            # Check for unit vectors (either +1 or -1 with all other entries zero)
+            if ((len(rows_one) == 1 and len(rows_nonzero_constraints) == 1) or
+                (len(rows_minus_one) == 1 and len(rows_nonzero_constraints) == 1)):
+                
+                row_with_unit = rows_one[0] if len(rows_one) == 1 else rows_minus_one[0]
                 obj_entry = col[0]
                 is_obj_zero = abs(obj_entry) <= 1e-10
                 
@@ -433,9 +444,9 @@ class PrimalSimplex:
                                  getattr(self, 'in_phase_one', False) or 
                                  getattr(self, 'eq_constraints', False))
                 
-                if accept_variable and row_with_one not in used_rows:
-                    basic_vars.append((j, row_with_one))
-                    used_rows.add(row_with_one)
+                if accept_variable and row_with_unit not in used_rows:
+                    basic_vars.append((j, row_with_unit))
+                    used_rows.add(row_with_unit)
 
         return sorted(basic_vars, key=lambda x: x[1])
 
@@ -537,7 +548,7 @@ class PrimalSimplex:
 
         solution = np.clip(solution, 0.0, None)
         solution[np.abs(solution) < 1e-12] = 0.0
-        optimal_value = -self.tableau[0, -1]
+        optimal_value = self.tableau[0, -1]
 
         return solution, optimal_value
 
